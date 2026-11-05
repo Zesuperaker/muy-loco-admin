@@ -209,6 +209,7 @@ mod jwt {
     ///
     /// ```rust,ignore
     /// JwtAuth::<users::Model>::new(|user| user.is_admin)
+    ///     .login_endpoint("/api/auth/login")
     ///     .display_name(|user| user.email.clone())
     ///     .permissions(|user, access| user.is_superuser || access.operation == Operation::View)
     /// ```
@@ -257,6 +258,20 @@ mod jwt {
         #[must_use]
         pub fn login_method(mut self, login: LoginMethod) -> Self {
             self.login = login;
+            self
+        }
+
+        /// Post the login form to `endpoint`, your app's login route
+        /// (defaults to `/api/auth/login`). Other form settings are kept, or
+        /// taken from [`FormLogin::default`] if the UI showed no form.
+        #[must_use]
+        pub fn login_endpoint(mut self, endpoint: impl Into<String>) -> Self {
+            let mut form = match self.login {
+                LoginMethod::Form(form) => form,
+                LoginMethod::Redirect { .. } | LoginMethod::None => FormLogin::default(),
+            };
+            form.endpoint = endpoint.into();
+            self.login = LoginMethod::Form(form);
             self
         }
     }

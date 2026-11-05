@@ -1,19 +1,11 @@
 # muy-loco-admin
 
-An auto-generated admin dashboard for [Loco](https://loco.rs) apps. It reads SeaORM entity
-metadata at runtime and serves an embedded React UI. Writes go through `ActiveModel`, so model
-hooks and validation run.
+An admin dashboard for [Loco](https://loco.rs) apps, generated at runtime from your SeaORM
+entities.
 
-- List with pagination, sorting, search and filters
-- Create, edit and delete; bulk delete and custom bulk actions
-- Foreign keys as links and searchable pickers; links to related records
-- CSV export, streamed in primary-key order from one consistent snapshot; a download that
-  stalls for `Admin::export_idle_timeout` (60 s) is stopped and its transaction rolled back
-- Composite and UUID primary keys, Postgres enums, JSON columns
+## Quickstart
 
 Requires Loco 1.2+, Rust 1.94+ and Postgres or SQLite.
-
-## Usage
 
 ```toml
 [dependencies]
@@ -26,18 +18,34 @@ use muy_loco_admin::{auth::JwtAuth, Admin, ModelAdmin};
 
 async fn initializers(_ctx: &AppContext) -> Result<Vec<Box<dyn Initializer>>> {
     Ok(vec![Box::new(
-        Admin::new(JwtAuth::<users::Model>::new(|user| user.is_admin))
-            .register(ModelAdmin::<users::Entity>::new().can_create(false))
-            .model::<articles::Entity>()
-            .middlewares_from::<Self>(),
+        Admin::new(
+            JwtAuth::<users::Model>::new(|user| user.is_admin)
+                .login_endpoint("/api/auth/login"), // your app's login route
+        )
+        .register(ModelAdmin::<users::Entity>::new().can_create(false))
+        .model::<articles::Entity>()
+        .middlewares_from::<Self>(),
     )])
 }
 ```
 
-Open `/admin` and sign in. The login form posts to `/api/auth/login` (the Loco SaaS starter
-endpoint); change it with `JwtAuth::login_method`.
+Open `/admin` and sign in. The login form posts `email` and `password` as JSON to the login
+endpoint and reads `token` from the reply, like the Loco SaaS starter's `/api/auth/login` (the
+default). For other field names, or to send users to your own login page, use
+`JwtAuth::login_method`.
 
-### Model options
+## Features
+
+- List with pagination, sorting, search and filters
+- Create, edit and delete; bulk delete and custom bulk actions
+- Writes go through `ActiveModel`, so model hooks and validation run
+- Foreign keys as links and searchable pickers; links to related records
+- CSV export, streamed in primary-key order from one consistent snapshot; a download that
+  stalls for `Admin::export_idle_timeout` (60 s) is stopped and its transaction rolled back
+- Composite and UUID primary keys, Postgres enums, JSON columns
+- The React UI is embedded in the crate; nothing to build or serve separately
+
+## Model options
 
 | `ModelAdmin` method | Default |
 | --- | --- |
@@ -54,7 +62,7 @@ endpoint); change it with `JwtAuth::login_method`.
 | `can_create`, `can_update`, `can_delete`, `can_export`, `read_only` | everything allowed |
 | `action(name, label, handler)` | none |
 
-### Authentication
+## Authentication
 
 - `JwtAuth<U: Authenticable>` uses Loco's `auth.jwt` config. The token is read from the
   configured locations or `Authorization: Bearer`. Restrict operations per model with
@@ -65,14 +73,14 @@ endpoint); change it with `JwtAuth::login_method`.
 
 Mutating API requests must send `X-Requested-With: muy-loco-admin`; the UI does this.
 
-### Middleware
+## Middleware
 
 Admin requests go through the app's Loco middleware stack, except `fallback` and `static`.
 `middlewares_from::<Self>()` uses the app's `Hooks::middlewares()`; without it, the stack
 configured under `server.middlewares` is used. The admin sets its own `Content-Security-Policy`,
 `X-Frame-Options` and `Referrer-Policy`, and drops `Clear-Site-Data`.
 
-### Configuration
+## Configuration
 
 Optional, in the Loco config:
 

@@ -177,6 +177,50 @@ async fn jwt_without_config_is_an_error() {
 }
 
 #[tokio::test]
+async fn login_endpoint_moves_the_login_form() {
+    let (_db, ctx) = setup().await;
+    let login = |auth: JwtAuth<users::Model>| {
+        let router = Admin::new(auth)
+            .model::<users::Entity>()
+            .router(&ctx)
+            .unwrap();
+        async move { Client::new(router).get("/api/config").await.json()["login"].clone() }
+    };
+    let jwt = || JwtAuth::<users::Model>::new(|_| true);
+
+    assert_eq!(
+        login(jwt().login_endpoint("/auth/sign_in")).await,
+        json!({
+            "type": "form",
+            "endpoint": "/auth/sign_in",
+            "identifier_field": "email",
+            "identifier_label": "Email",
+            "password_field": "password",
+            "token_field": "token",
+        })
+    );
+
+    let username = jwt()
+        .login_method(LoginMethod::Form(FormLogin {
+            identifier_field: "username".into(),
+            ..FormLogin::default()
+        }))
+        .login_endpoint("/session");
+    let form = login(username).await;
+    assert_eq!(form["endpoint"], "/session");
+    assert_eq!(form["identifier_field"], "username", "other settings kept");
+
+    let redirect = jwt()
+        .login_method(LoginMethod::Redirect {
+            url: "/login".into(),
+        })
+        .login_endpoint("/session");
+    let form = login(redirect).await;
+    assert_eq!(form["type"], "form");
+    assert_eq!(form["identifier_field"], "email");
+}
+
+#[tokio::test]
 async fn allow_all_refuses_production() {
     let test_db = database().await;
     let ctx = context(&test_db, Environment::Production, &json!({}));

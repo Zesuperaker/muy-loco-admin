@@ -26,6 +26,7 @@ mod meta;
 mod model;
 mod query;
 mod resource;
+mod task;
 mod value;
 
 pub use admin::{Admin, CONFIG_KEY};
@@ -37,3 +38,4 @@ pub use error::{AdminError, FieldErrors};
 pub use meta::{FieldKind, SortDirection};
 pub use model::{ActionResult, ModelAdmin};
 pub use query::{MAX_PER_PAGE, NOT_NULL_FILTER, NULL_FILTER};
+pub use task::PromoteAdmin;

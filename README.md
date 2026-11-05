@@ -5,28 +5,54 @@ entities.
 
 ## Quickstart
 
-Requires Loco 1.2+, Rust 1.94+ and Postgres or SQLite.
+Requires Loco 1.2+, Rust 1.94+ and Postgres or SQLite. The steps assume an app from Loco's SaaS
+starter.
+
+Add the crate:
 
 ```toml
 [dependencies]
 muy-loco-admin = "0.1"
 ```
 
-```rust
-// src/app.rs, inside `impl Hooks for App`
-use muy_loco_admin::{auth::JwtAuth, Admin, ModelAdmin};
+Give `users` an `is_admin` column:
 
+```sh
+cargo loco generate migration AddIsAdminToUsers is_admin:bool
+cargo loco db migrate
+cargo loco db entities
+```
+
+Register the admin and its `admin:promote` task in `src/app.rs`:
+
+```rust
+use muy_loco_admin::{auth::JwtAuth, Admin, ModelAdmin, PromoteAdmin};
+
+// inside `impl Hooks for App`
 async fn initializers(_ctx: &AppContext) -> Result<Vec<Box<dyn Initializer>>> {
     Ok(vec![Box::new(
         Admin::new(
-            JwtAuth::<users::Model>::new(|user| user.is_admin)
+            JwtAuth::<users::Model>::new(|user| user.is_admin == Some(true))
                 .login_endpoint("/api/auth/login"), // your app's login route
         )
         .register(ModelAdmin::<users::Entity>::new().can_create(false))
-        .model::<articles::Entity>()
+        .model::<articles::Entity>() // one line per model to manage
         .middlewares_from::<Self>(),
     )])
 }
+
+fn register_tasks(tasks: &mut Tasks) {
+    // ...the app's existing tasks
+    tasks.register(PromoteAdmin::new(users::Column::Email, users::Column::IsAdmin));
+}
+```
+
+Create a user (skip if you have one), make them an admin and start the app:
+
+```sh
+cargo loco task user:create email:you@example.com name:You password:change-me
+cargo loco task admin:promote email:you@example.com
+cargo loco start
 ```
 
 Open `/admin` and sign in. The login form posts `email` and `password` as JSON to the login

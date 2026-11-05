@@ -68,6 +68,10 @@ impl Hooks for App {
         // tasks-inject (do not remove)
         tasks.register(tasks::user_create::UserCreate);
         tasks.register(tasks::user_delete::UserDelete);
+        tasks.register(muy_loco_admin::PromoteAdmin::new(
+            users::Column::Email,
+            users::Column::IsAdmin,
+        ));
     }
     async fn truncate(ctx: &AppContext) -> Result<()> {
         truncate_table(&ctx.db, article_tags::Entity).await?;

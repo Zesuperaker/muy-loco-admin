@@ -1,0 +1,39 @@
+name: muy-loco-admin-dogfood
+
+services:
+  db:
+    image: postgres:18.6-alpine
+    environment:
+      POSTGRES_USER: loco
+      POSTGRES_PASSWORD: loco
+      POSTGRES_DB: dogfood
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - db-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U loco -d dogfood"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  app:
+    build:
+      context: ..
+      dockerfile: dogfood/Dockerfile
+    environment:
+      DATABASE_URL: postgres://loco:loco@db:5432/dogfood
+      JWT_SECRET: ZG9nZm9vZC1qd3Qtc2VjcmV0LWZvci1sb2NhbC11c2Utb25seQ==
+      HOST: http://localhost:${APP_PORT:-5150}
+      MAILER_HOST: localhost
+      MAILER_USER: dogfood
+      MAILER_PASSWORD: dogfood
+      SEED_ON_START: ${SEED_ON_START:-true}
+    ports:
+      - "${APP_PORT:-5150}:5150"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  db-data:

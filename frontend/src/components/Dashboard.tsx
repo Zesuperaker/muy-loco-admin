@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api";
-import { Link, paths } from "../router";
+import { Link } from "react-router";
+import { paths } from "../paths";
 import type { ModelMeta } from "../types";
 import { Card, ErrorBanner } from "./ui";
 

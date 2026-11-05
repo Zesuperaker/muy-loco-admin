@@ -1,0 +1,12 @@
+@import "tailwindcss" source(none);
+
+@source "./";
+@source "../index.html";
+@source not "./test";
+@source not "./**/*.test.tsx";
+
+@layer components {
+  .input {
+    @apply block w-full rounded-md border-0 bg-white px-3 py-1.5 text-sm text-slate-900 shadow-sm ring-1 ring-slate-300 ring-inset placeholder:text-slate-400 focus:ring-2 focus:ring-indigo-600 focus:outline-none focus:ring-inset disabled:bg-slate-100 disabled:text-slate-500 dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-600 dark:disabled:bg-slate-900;
+  }
+}

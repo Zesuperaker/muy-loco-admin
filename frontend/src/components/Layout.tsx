@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
-import { Link } from "../router";
+import { Link, NavLink } from "react-router";
+import { paths } from "../paths";
 import type { AdminUser, ModelMeta } from "../types";
 import { Button } from "./ui";
 
@@ -7,14 +8,12 @@ export function Layout({
   title,
   user,
   models,
-  current,
   onSignOut,
   children,
 }: {
   title: string;
   user: AdminUser;
   models: ModelMeta[];
-  current?: string;
   onSignOut: () => void;
   children: ReactNode;
 }) {
@@ -22,24 +21,25 @@ export function Layout({
     <div className="flex min-h-screen flex-col md:flex-row">
       <aside className="border-b border-slate-200 bg-white md:w-60 md:shrink-0 md:border-r md:border-b-0 dark:border-slate-800 dark:bg-slate-900">
         <div className="px-5 py-4">
-          <Link to="/" className="text-lg font-semibold text-slate-900 dark:text-white">
+          <Link to={paths.dashboard()} className="text-lg font-semibold text-slate-900 dark:text-white">
             {title}
           </Link>
         </div>
         <nav aria-label="Models" className="flex flex-row flex-wrap gap-1 px-3 pb-3 md:flex-col">
           {models.map((model) => (
-            <Link
+            <NavLink
               key={model.name}
-              to={`/models/${encodeURIComponent(model.name)}`}
-              aria-current={current === model.name ? "page" : undefined}
-              className={`rounded-md px-3 py-1.5 text-sm ${
-                current === model.name
-                  ? "bg-indigo-50 font-medium text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300"
-                  : "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
-              }`}
+              to={paths.list(model.name)}
+              className={({ isActive }) =>
+                `rounded-md px-3 py-1.5 text-sm ${
+                  isActive
+                    ? "bg-indigo-50 font-medium text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300"
+                    : "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
+                }`
+              }
             >
               {model.label}
-            </Link>
+            </NavLink>
           ))}
         </nav>
       </aside>

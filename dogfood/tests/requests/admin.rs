@@ -31,6 +31,10 @@ async fn serves_the_ui_and_requires_admin_users() {
 
         let res = request.get("/admin").await;
         assert_eq!(res.status_code(), 200);
+        assert!(
+            res.headers().contains_key("x-request-id"),
+            "the app's middleware wraps the admin"
+        );
         assert!(res
             .text()
             .contains(r#"<meta name="mla-base" content="/admin" />"#));

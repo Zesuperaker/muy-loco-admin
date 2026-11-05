@@ -47,6 +47,11 @@ server:
         uri: "/static"
         path: "assets/static"
       fallback: "assets/static/404.html"
+    compression:
+      enable: true
+    secure_headers:
+      enable: true
+      preset: github
 
 # Worker Configuration
 workers:

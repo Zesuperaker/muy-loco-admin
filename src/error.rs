@@ -25,6 +25,8 @@ pub enum AdminError {
     NotFound,
     /// The request is malformed (400).
     BadRequest(String),
+    /// The request body exceeds the app's payload limit (413).
+    PayloadTooLarge,
     /// The submitted data was rejected (422).
     Validation {
         message: String,
@@ -49,6 +51,7 @@ impl AdminError {
             Self::Forbidden => StatusCode::FORBIDDEN,
             Self::NotFound => StatusCode::NOT_FOUND,
             Self::BadRequest(_) => StatusCode::BAD_REQUEST,
+            Self::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Self::Validation { .. } => StatusCode::UNPROCESSABLE_ENTITY,
             Self::Conflict(_) => StatusCode::CONFLICT,
             Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
@@ -60,6 +63,7 @@ impl AdminError {
             Self::Unauthenticated => "authentication required".to_string(),
             Self::Forbidden => "you do not have permission to perform this action".to_string(),
             Self::NotFound => "not found".to_string(),
+            Self::PayloadTooLarge => "request body is too large".to_string(),
             Self::BadRequest(m) | Self::Conflict(m) | Self::Validation { message: m, .. } => {
                 m.clone()
             }
@@ -191,6 +195,11 @@ mod tests {
         assert_eq!(AdminError::Forbidden.status(), 403);
         assert_eq!(AdminError::NotFound.status(), 404);
         assert_eq!(AdminError::bad_request("x").status(), 400);
+        assert_eq!(AdminError::PayloadTooLarge.status(), 413);
+        assert_eq!(
+            AdminError::PayloadTooLarge.to_string(),
+            "request body is too large"
+        );
         let validation = AdminError::Validation {
             message: "x".into(),
             fields: FieldErrors::new(),

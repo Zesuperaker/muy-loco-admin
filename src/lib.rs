@@ -11,7 +11,8 @@
 //!     Ok(vec![Box::new(
 //!         Admin::new(JwtAuth::<users::Model>::new(|user| user.is_admin))
 //!             .register(ModelAdmin::<users::Entity>::new().can_create(false))
-//!             .model::<posts::Entity>(),
+//!             .model::<posts::Entity>()
+//!             .middlewares_from::<Self>(),
 //!     )])
 //! }
 //! ```

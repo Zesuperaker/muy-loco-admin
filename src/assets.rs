@@ -13,10 +13,6 @@ include!(concat!(env!("OUT_DIR"), "/assets.rs"));
 /// Placeholder for the mount path, written into `index.html` by the build.
 pub(crate) const BASE_PLACEHOLDER: &str = "/__MLA_BASE__";
 
-const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; \
-                   connect-src 'self'; font-src 'self' data:; object-src 'none'; base-uri 'self'; \
-                   form-action 'self'; frame-ancestors 'none'";
-
 const NOT_BUILT: &str = "<!doctype html><html><head><meta charset=\"utf-8\"><title>Admin</title>\
                          </head><body><p>The admin UI has not been built. Run <code>npm ci &amp;&amp; \
                          npm run build</code> in <code>frontend/</code>.</p></body></html>";
@@ -89,10 +85,6 @@ pub(crate) async fn index(State(state): State<AdminState>, method: Method) -> Re
                 HeaderValue::from_static("text/html; charset=utf-8"),
             ),
             (header::CACHE_CONTROL, HeaderValue::from_static("no-cache")),
-            (
-                header::CONTENT_SECURITY_POLICY,
-                HeaderValue::from_static(CSP),
-            ),
         ],
         index_html(&state.0.base_path),
     )

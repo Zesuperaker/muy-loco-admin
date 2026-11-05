@@ -49,7 +49,7 @@ impl Hooks for App {
     async fn initializers(_ctx: &AppContext) -> Result<Vec<Box<dyn Initializer>>> {
         Ok(vec![
             Box::new(initializers::view_engine::ViewEngineInitializer),
-            Box::new(admin::admin()),
+            Box::new(admin::admin().middlewares_from::<Self>()),
         ])
     }
 

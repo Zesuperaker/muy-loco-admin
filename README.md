@@ -20,14 +20,15 @@ muy-loco-admin = "0.1"
 ```
 
 ```rust
-// src/app.rs
+// src/app.rs, inside `impl Hooks for App`
 use muy_loco_admin::{auth::JwtAuth, Admin, ModelAdmin};
 
 async fn initializers(_ctx: &AppContext) -> Result<Vec<Box<dyn Initializer>>> {
     Ok(vec![Box::new(
         Admin::new(JwtAuth::<users::Model>::new(|user| user.is_admin))
             .register(ModelAdmin::<users::Entity>::new().can_create(false))
-            .model::<articles::Entity>(),
+            .model::<articles::Entity>()
+            .middlewares_from::<Self>(),
     )])
 }
 ```
@@ -62,6 +63,13 @@ endpoint); change it with `JwtAuth::login_method`.
   `AdminUser::new(id, name).with_policy(...)`.
 
 Mutating API requests must send `X-Requested-With: muy-loco-admin`; the UI does this.
+
+### Middleware
+
+Admin requests go through the app's Loco middleware stack, except `fallback` and `static`.
+`middlewares_from::<Self>()` uses the app's `Hooks::middlewares()`; without it, the stack
+configured under `server.middlewares` is used. The admin sets its own `Content-Security-Policy`,
+`X-Frame-Options` and `Referrer-Policy`, and drops `Clear-Site-Data`.
 
 ### Configuration
 

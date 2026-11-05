@@ -8,7 +8,7 @@ use std::{
 use axum::{
     Json, Router,
     extract::{FromRequestParts, Path, Query, State, rejection::JsonRejection},
-    http::{HeaderValue, Method, header, request::Parts},
+    http::{HeaderValue, Method, StatusCode, header, request::Parts},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
@@ -124,12 +124,18 @@ impl FromRequestParts<AdminState> for Authed {
     }
 }
 
+fn rejection(err: &JsonRejection) -> AdminError {
+    if err.status() == StatusCode::PAYLOAD_TOO_LARGE {
+        AdminError::PayloadTooLarge
+    } else {
+        AdminError::bad_request(err.body_text())
+    }
+}
+
 fn body(
     input: Result<Json<Map<String, JsonValue>>, JsonRejection>,
 ) -> AdminResult<Map<String, JsonValue>> {
-    input
-        .map(|Json(map)| map)
-        .map_err(|e| AdminError::bad_request(e.body_text()))
+    input.map(|Json(map)| map).map_err(|e| rejection(&e))
 }
 
 #[derive(Deserialize)]
@@ -138,7 +144,7 @@ pub(crate) struct KeysBody {
 }
 
 fn keys(input: Result<Json<KeysBody>, JsonRejection>) -> AdminResult<Vec<String>> {
-    let Json(body) = input.map_err(|e| AdminError::bad_request(e.body_text()))?;
+    let Json(body) = input.map_err(|e| rejection(&e))?;
     if body.keys.is_empty() {
         return Err(AdminError::bad_request("no records selected"));
     }
@@ -315,7 +321,7 @@ async fn create(
     let model = state.authorize(&user, &name, Operation::Create)?;
     let record = model.resource.create(&state.0.ctx.db, body(input)?).await?;
     let json = record_response(&state, &user, model, &record).await?;
-    Ok((axum::http::StatusCode::CREATED, json).into_response())
+    Ok((StatusCode::CREATED, json).into_response())
 }
 
 async fn update(

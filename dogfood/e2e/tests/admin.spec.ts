@@ -16,6 +16,15 @@ async function signedIn(page: Page, path: string) {
   await page.goto(path);
 }
 
+test("wraps admin responses in the app's middleware", async ({ request }) => {
+  const res = await request.get("/admin", { headers: { "accept-encoding": "gzip" } });
+  const headers = res.headers();
+  expect(headers["content-encoding"]).toBe("gzip");
+  expect(headers["x-request-id"]).toBeTruthy();
+  expect(headers["strict-transport-security"]).toBeTruthy();
+  expect(headers["content-security-policy"]).toContain("script-src 'self'");
+});
+
 test("refuses users without admin access", async ({ page }) => {
   await signIn(page, "user2@example.com");
   await expect(page.getByText("Your account does not have admin access.")).toBeVisible();

@@ -12,7 +12,8 @@ use axum::{
 };
 use loco_rs::{
     Error,
-    app::{AppContext, Initializer},
+    app::{AppContext, Hooks, Initializer},
+    controller::middleware::{MiddlewareLayer, default_middleware_stack},
 };
 use sea_orm::{ActiveModelBehavior, EntityTrait, IntoActiveModel};
 use serde::Deserialize;
@@ -27,6 +28,9 @@ use crate::{
 };
 
 const DEFAULT_PATH: &str = "/admin";
+/// Loco middlewares that install routes or fallbacks instead of wrapping
+/// requests; they would shadow the admin's own routes.
+const SKIPPED_MIDDLEWARES: &[&str] = &["fallback", "static"];
 const DEFAULT_TITLE: &str = "Admin";
 /// Key of the admin settings under `initializers:` in the Loco config.
 pub const CONFIG_KEY: &str = "admin";
@@ -39,10 +43,17 @@ pub const CONFIG_KEY: &str = "admin";
 ///     Ok(vec![Box::new(
 ///         Admin::new(JwtAuth::<users::Model>::new(|user| user.is_admin))
 ///             .register(ModelAdmin::<users::Entity>::new().can_create(false))
-///             .model::<posts::Entity>(),
+///             .model::<posts::Entity>()
+///             .middlewares_from::<Self>(),
 ///     )])
 /// }
 /// ```
+///
+/// Admin requests go through the app's Loco middleware stack (except the
+/// `fallback` and `static` middlewares). Pass the app's hooks with
+/// [`Admin::middlewares_from`] so middleware added or removed in
+/// `Hooks::middlewares` applies too; otherwise the stack configured under
+/// `server.middlewares` is used.
 ///
 /// The mount path and title can be overridden in the Loco config:
 ///
@@ -59,7 +70,11 @@ pub struct Admin {
     auth: Arc<dyn AdminAuth>,
     resources: Vec<Arc<dyn Resource>>,
     errors: Vec<String>,
+    middlewares: MiddlewareStack,
 }
+
+/// Builds the Loco middleware stack, like `Hooks::middlewares`.
+type MiddlewareStack = fn(&AppContext) -> Vec<Box<dyn MiddlewareLayer>>;
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -82,8 +97,19 @@ fn validate_path(path: &str) -> Result<String, String> {
     Ok(trimmed.to_string())
 }
 
+const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; \
+                   connect-src 'self'; font-src 'self' data:; object-src 'none'; base-uri 'self'; \
+                   form-action 'self'; frame-ancestors 'none'";
+
+/// Runs outside the app's middleware: the admin UI needs its own CSP (Loco's
+/// presets either require HTTPS for scripts or allow inline styles), and
+/// `Clear-Site-Data` on every response would sign the user out.
 async fn security_headers(mut response: Response) -> Response {
     let headers = response.headers_mut();
+    headers.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static(CSP),
+    );
     headers.insert(
         header::X_CONTENT_TYPE_OPTIONS,
         HeaderValue::from_static("nosniff"),
@@ -93,6 +119,7 @@ async fn security_headers(mut response: Response) -> Response {
         header::REFERRER_POLICY,
         HeaderValue::from_static("same-origin"),
     );
+    headers.remove("clear-site-data");
     if !headers.contains_key(header::CACHE_CONTROL) {
         headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     }
@@ -109,7 +136,17 @@ impl Admin {
             auth: Arc::new(auth),
             resources: Vec::new(),
             errors: Vec::new(),
+            middlewares: default_middleware_stack,
         }
+    }
+
+    /// Wrap admin requests in the middleware stack of the app `H`
+    /// (`H::middlewares`), the same stack Loco applies to the app's routes.
+    /// Call it with `Self` inside `Hooks::initializers`.
+    #[must_use]
+    pub fn middlewares_from<H: Hooks>(mut self) -> Self {
+        self.middlewares = H::middlewares;
+        self
     }
 
     /// Title shown in the UI.
@@ -231,13 +268,21 @@ impl Admin {
             ctx: ctx.clone(),
         }));
 
-        Ok(Router::new()
+        let mut router: Router<AppContext> = Router::new()
             .nest("/api", api::router())
             .route("/assets/{*path}", get(assets::asset))
             .route("/", get(assets::index))
             .fallback(assets::index)
+            .with_state(state);
+        for middleware in (self.middlewares)(ctx) {
+            if middleware.is_enabled() && !SKIPPED_MIDDLEWARES.contains(&middleware.name()) {
+                router = middleware.apply(router)?;
+                tracing::debug!(name = middleware.name(), "admin +middleware");
+            }
+        }
+        Ok(router
             .layer(map_response(security_headers))
-            .with_state(state))
+            .with_state(ctx.clone()))
     }
 
     fn settings(ctx: &AppContext) -> loco_rs::Result<Settings> {

@@ -88,7 +88,7 @@ describe("RecordPage", () => {
     const user = userEvent.setup();
     renderApp("/admin/models/posts/new");
 
-    expect(await screen.findByRole("heading", { name: "New posts" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "New record" })).toBeInTheDocument();
     expect(screen.queryByLabelText("Id")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Created at")).not.toBeInTheDocument();
     await user.type(screen.getByLabelText("Title"), "Fresh");

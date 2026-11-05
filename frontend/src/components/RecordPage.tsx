@@ -126,7 +126,7 @@ function RecordForm({
             ← {model.label}
           </Link>
           <h1 className="text-2xl font-semibold">
-            {data ? data.record.label : `New ${model.label.toLowerCase()}`}
+            {data ? data.record.label : "New record"}
           </h1>
         </div>
         <div className="flex gap-2">

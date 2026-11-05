@@ -1,0 +1,50 @@
+[workspace]
+members = [".", "migration"]
+
+[package]
+name = "dogfood"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.94"
+publish = false
+default-run = "dogfood-cli"
+
+[workspace.dependencies]
+loco-rs = { version = "=1.2.0" }
+
+[dependencies]
+loco-rs = { workspace = true }
+muy-loco-admin = { version = "=0.1.0", path = ".." }
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = { version = "=1.0.154" }
+tokio = { version = "=1.54.1", default-features = false, features = ["rt-multi-thread"] }
+async-trait = { version = "=0.1.92" }
+axum = { version = "=0.8.9" }
+tracing = { version = "=0.1.44" }
+tracing-subscriber = { version = "=0.3.23", features = ["env-filter", "json"] }
+regex = { version = "=1.13.1" }
+migration = { path = "migration" }
+sea-orm = { version = "=2.0.4", features = [
+  "sqlx-sqlite",
+  "sqlx-postgres",
+  "runtime-tokio-rustls",
+  "macros",
+] }
+chrono = { version = "=0.4.45" }
+# Must match the validator major that loco-rs 1.2 re-exports.
+validator = { version = "=0.20.0" }
+uuid = { version = "=1.29.0", features = ["v4"] }
+ts-rs = { version = "=12.0.1", features = ["chrono-impl", "serde-compat"] }
+# Loco's mailer API takes `include_dir::Dir` templates.
+include_dir = { version = "=0.7.4" }
+
+[[bin]]
+name = "dogfood-cli"
+path = "src/bin/main.rs"
+required-features = []
+
+[dev-dependencies]
+loco-rs = { workspace = true, features = ["testing"] }
+serial_test = { version = "=4.0.1" }
+rstest = { version = "=0.28.0" }
+insta = { version = "=1.49.0", features = ["redactions", "yaml", "filters"] }

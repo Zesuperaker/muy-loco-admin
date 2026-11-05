@@ -189,7 +189,7 @@ describe("ModelList", () => {
     );
     const { unmount } = renderApp("/admin/models/posts");
     expect(await screen.findByText("No records found.")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Add posts" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "Add record" })).toHaveAttribute(
       "href",
       "/admin/models/posts/new",
     );

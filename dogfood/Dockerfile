@@ -21,7 +21,9 @@ COPY --from=builder /usr/local/bin/dogfood-cli /usr/local/bin/dogfood-cli
 COPY dogfood/config ./config
 COPY dogfood/assets ./assets
 COPY dogfood/src/fixtures ./src/fixtures
-COPY dogfood/docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY --chmod=755 dogfood/docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+# A Windows checkout may have converted the script to CRLF.
+RUN sed -i 's/\r$//' /usr/local/bin/entrypoint.sh
 USER dogfood
 ENV LOCO_ENV=production
 EXPOSE 5150

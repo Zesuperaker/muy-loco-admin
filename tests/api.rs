@@ -919,7 +919,7 @@ async fn invalid_model_configuration_fails_at_mount() {
         (Admin::new(AllowAll).path("/"), "must start with `/`"),
     ];
     for (admin, expected) in cases {
-        let err = admin.router(&ctx).err().expect("configuration error");
+        let err = admin.router(&ctx).expect_err("configuration error");
         assert!(
             err.to_string().contains(expected),
             "{err} should contain {expected}"

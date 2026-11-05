@@ -250,6 +250,9 @@ mod tests {
             variants: vec![Alias::new("a").into_iden(), Alias::new("b").into_iden()],
         };
         assert_eq!(enum_choices(&ct), vec!["a", "b"]);
-        assert!(enum_choices(&ColumnType::Text).is_empty());
+        assert_eq!(
+            enum_choices(&ColumnType::Text),
+            [] as [std::string::String; 0]
+        );
     }
 }

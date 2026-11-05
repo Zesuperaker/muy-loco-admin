@@ -30,7 +30,11 @@ impl MigrationTrait for Migration {
         m.create_table(
             Table::create()
                 .table(ArticleTags::Table)
-                .col(ColumnDef::new(ArticleTags::ArticleId).big_integer().not_null())
+                .col(
+                    ColumnDef::new(ArticleTags::ArticleId)
+                        .big_integer()
+                        .not_null(),
+                )
                 .col(ColumnDef::new(ArticleTags::TagId).big_integer().not_null())
                 .col(
                     ColumnDef::new(ArticleTags::Position)

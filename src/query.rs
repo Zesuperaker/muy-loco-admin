@@ -91,7 +91,10 @@ mod tests {
         let p = ListParams::from_query(&HashMap::new()).unwrap();
         assert_eq!(p.page, 1);
         assert_eq!(p.per_page, None);
-        assert!(p.filters.is_empty());
+        assert_eq!(
+            p.filters,
+            [] as [(std::string::String, std::string::String); 0]
+        );
     }
 
     #[test]

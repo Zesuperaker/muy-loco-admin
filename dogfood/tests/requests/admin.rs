@@ -31,7 +31,9 @@ async fn serves_the_ui_and_requires_admin_users() {
 
         let res = request.get("/admin").await;
         assert_eq!(res.status_code(), 200);
-        assert!(res.text().contains(r#"<meta name="mla-base" content="/admin" />"#));
+        assert!(res
+            .text()
+            .contains(r#"<meta name="mla-base" content="/admin" />"#));
 
         let config = request.get("/admin/api/config").await.json::<Value>();
         assert_eq!(config["title"], "Dogfood Admin");
@@ -40,11 +42,17 @@ async fn serves_the_ui_and_requires_admin_users() {
         assert_eq!(request.get("/admin/api/me").await.status_code(), 401);
 
         let token = login(&request, NON_ADMIN).await;
-        let res = request.get("/admin/api/me").authorization_bearer(&token).await;
+        let res = request
+            .get("/admin/api/me")
+            .authorization_bearer(&token)
+            .await;
         assert_eq!(res.status_code(), 403);
 
         let token = login(&request, ADMIN).await;
-        let res = request.get("/admin/api/me").authorization_bearer(&token).await;
+        let res = request
+            .get("/admin/api/me")
+            .authorization_bearer(&token)
+            .await;
         assert_eq!(res.status_code(), 200);
         assert_eq!(res.json::<Value>()["name"], "user1@example.com");
     })
@@ -68,7 +76,10 @@ async fn exposes_the_schema_without_secrets() {
             .iter()
             .map(|m| m["name"].as_str().unwrap())
             .collect();
-        assert_eq!(models, ["users", "articles", "categories", "tags", "article_tags"]);
+        assert_eq!(
+            models,
+            ["users", "articles", "categories", "tags", "article_tags"]
+        );
 
         let users = &schema["models"][0];
         let fields: Vec<&str> = users["fields"]
@@ -77,7 +88,13 @@ async fn exposes_the_schema_without_secrets() {
             .iter()
             .map(|f| f["name"].as_str().unwrap())
             .collect();
-        for secret in ["password", "api_key", "reset_token", "email_verification_token", "magic_link_token"] {
+        for secret in [
+            "password",
+            "api_key",
+            "reset_token",
+            "email_verification_token",
+            "magic_link_token",
+        ] {
             assert!(!fields.contains(&secret), "{secret} must be hidden");
         }
         assert_eq!(users["capabilities"]["create"], false);
@@ -91,7 +108,10 @@ async fn exposes_the_schema_without_secrets() {
             .unwrap();
         assert_eq!(status["choices"], json!(["draft", "review", "published"]));
         assert_eq!(articles["primary_key"], json!(["id"]));
-        assert_eq!(schema["models"][4]["primary_key"], json!(["article_id", "tag_id"]));
+        assert_eq!(
+            schema["models"][4]["primary_key"],
+            json!(["article_id", "tag_id"])
+        );
     })
     .await;
 }
@@ -109,7 +129,10 @@ async fn lists_creates_updates_and_deletes() {
             .await
             .json::<Value>();
         assert_eq!(list["total"], 5);
-        assert_eq!(list["records"][0]["values"]["title"], "100% uptime is a myth");
+        assert_eq!(
+            list["records"][0]["values"]["title"],
+            "100% uptime is a myth"
+        );
         assert_eq!(list["labels"]["user_id"]["1"], "user1@example.com");
 
         let created = request
@@ -119,7 +142,10 @@ async fn lists_creates_updates_and_deletes() {
             .json(&json!({"name": "Ops", "slug": "ops"}))
             .await;
         assert_eq!(created.status_code(), 201, "{}", created.text());
-        let key = created.json::<Value>()["record"]["key"].as_str().unwrap().to_string();
+        let key = created.json::<Value>()["record"]["key"]
+            .as_str()
+            .unwrap()
+            .to_string();
 
         let duplicate = request
             .post("/admin/api/models/categories/records")
@@ -180,7 +206,11 @@ async fn runs_actions_and_exports() {
             .await;
         assert_eq!(res.status_code(), 200, "{}", res.text());
         assert_eq!(res.json::<Value>()["message"], "Published 2 articles");
-        let article = articles::Entity::find_by_id(4).one(&ctx.db).await.unwrap().unwrap();
+        let article = articles::Entity::find_by_id(4)
+            .one(&ctx.db)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(article.status, ArticleStatus::Published);
         assert!(article.published_at.is_some());
 

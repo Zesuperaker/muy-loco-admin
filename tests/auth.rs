@@ -125,7 +125,7 @@ async fn jwt_token_from_configured_cookie() {
     let ctx = context(
         &test_db,
         Environment::Test,
-        json!({"auth": {"jwt": {
+        &json!({"auth": {"jwt": {
             "secret": JWT_SECRET,
             "expiration": 3600,
             "location": {"from": "Cookie", "name": "session"}
@@ -158,7 +158,7 @@ async fn jwt_token_from_configured_cookie() {
 #[tokio::test]
 async fn jwt_without_config_is_an_error() {
     let test_db = database().await;
-    let ctx = context(&test_db, Environment::Test, json!({"auth": null}));
+    let ctx = context(&test_db, Environment::Test, &json!({"auth": null}));
     let router = Admin::new(JwtAuth::<users::Model>::new(|_| true).login_method(
         LoginMethod::Redirect {
             url: "/login".into(),
@@ -179,7 +179,7 @@ async fn jwt_without_config_is_an_error() {
 #[tokio::test]
 async fn allow_all_refuses_production() {
     let test_db = database().await;
-    let ctx = context(&test_db, Environment::Production, json!({}));
+    let ctx = context(&test_db, Environment::Production, &json!({}));
     let router = Admin::new(AllowAll)
         .model::<users::Entity>()
         .router(&ctx)

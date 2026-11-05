@@ -19,7 +19,14 @@ pub fn admin() -> Admin {
         ModelAdmin::<users::Entity>::new()
             .can_create(false)
             .display_field("email")
-            .list_display(["id", "email", "name", "is_admin", "email_verified_at", "created_at"])
+            .list_display([
+                "id",
+                "email",
+                "name",
+                "is_admin",
+                "email_verified_at",
+                "created_at",
+            ])
             .list_filter(["is_admin"])
             .readonly_fields([
                 "pid",
@@ -44,16 +51,20 @@ pub fn admin() -> Admin {
                 "category_id",
                 "published_at",
             ])
-            .action("publish", "Publish", |ctx: AppContext, articles| async move {
-                let count = articles.len();
-                for article in articles {
-                    let mut am: articles::ActiveModel = article.into_active_model();
-                    am.status = ActiveValue::Set(ArticleStatus::Published);
-                    am.published_at = ActiveValue::Set(Some(chrono::Utc::now().into()));
-                    am.update(&ctx.db).await?;
-                }
-                Ok(format!("Published {count} articles"))
-            }),
+            .action(
+                "publish",
+                "Publish",
+                |ctx: AppContext, articles| async move {
+                    let count = articles.len();
+                    for article in articles {
+                        let mut am: articles::ActiveModel = article.into_active_model();
+                        am.status = ActiveValue::Set(ArticleStatus::Published);
+                        am.published_at = ActiveValue::Set(Some(chrono::Utc::now().into()));
+                        am.update(&ctx.db).await?;
+                    }
+                    Ok(format!("Published {count} articles"))
+                },
+            ),
     )
     .model::<categories::Entity>()
     .register(ModelAdmin::<tags::Entity>::new().ordering("name", SortDirection::Asc))

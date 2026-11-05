@@ -21,7 +21,7 @@ fn app_router() -> Router {
 #[tokio::test]
 async fn initializer_mounts_the_admin() {
     let test_db = database().await;
-    let ctx = context(&test_db, Environment::Test, json!({}));
+    let ctx = context(&test_db, Environment::Test, &json!({}));
     let admin = admin();
     assert_eq!(admin.name(), CONFIG_KEY);
     assert_eq!(admin.mount_path().unwrap(), "/admin");
@@ -76,7 +76,7 @@ async fn initializer_mounts_the_admin() {
 #[tokio::test]
 async fn embedded_assets_are_served() {
     let test_db = database().await;
-    let ctx = context(&test_db, Environment::Test, json!({}));
+    let ctx = context(&test_db, Environment::Test, &json!({}));
     let router = admin().after_routes(app_router(), &ctx).await.unwrap();
     let client = Client::new(router);
     let html = client.get("/admin").await.text();
@@ -102,7 +102,7 @@ async fn config_overrides_path_and_title() {
     let ctx = context(
         &test_db,
         Environment::Test,
-        json!({"initializers": {"admin": {"path": "/backoffice/", "title": "Back office"}}}),
+        &json!({"initializers": {"admin": {"path": "/backoffice/", "title": "Back office"}}}),
     );
     let router = admin().after_routes(app_router(), &ctx).await.unwrap();
     let client = Client::new(router);
@@ -118,7 +118,7 @@ async fn config_can_disable_the_admin() {
     let ctx = context(
         &test_db,
         Environment::Test,
-        json!({"initializers": {"admin": {"enabled": false}}}),
+        &json!({"initializers": {"admin": {"enabled": false}}}),
     );
     let router = admin().after_routes(app_router(), &ctx).await.unwrap();
     let client = Client::new(router);
@@ -132,7 +132,7 @@ async fn invalid_config_is_rejected() {
         let ctx = context(
             &test_db,
             Environment::Test,
-            json!({"initializers": {"admin": settings}}),
+            &json!({"initializers": {"admin": settings}}),
         );
         assert!(
             admin().after_routes(app_router(), &ctx).await.is_err(),
@@ -144,7 +144,7 @@ async fn invalid_config_is_rejected() {
 #[tokio::test]
 async fn router_can_be_mounted_by_hand() {
     let test_db = database().await;
-    let ctx = context(&test_db, Environment::Test, json!({}));
+    let ctx = context(&test_db, Environment::Test, &json!({}));
     let admin = admin().path("/ops/admin").title("Ops");
     let path = admin.mount_path().unwrap();
     let router = Router::new().nest(&path, admin.router(&ctx).unwrap());

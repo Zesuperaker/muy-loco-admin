@@ -270,7 +270,10 @@ fn stamp<A>(
 static COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn database_url() -> String {
-    std::env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite::memory:".to_string())
+    std::env::var("DATABASE_URL")
+        .ok()
+        .filter(|url| !url.is_empty())
+        .unwrap_or_else(|| "sqlite::memory:".to_string())
 }
 
 pub fn is_postgres() -> bool {
@@ -338,7 +341,7 @@ async fn create_schema(db: &DatabaseConnection) {
         .expect("create notes");
 }
 
-pub fn config(uri: &str, extra: Value) -> Config {
+pub fn config(uri: &str, extra: &Value) -> Config {
     let mut base = json!({
         "logger": { "enable": false, "level": "error", "format": "compact" },
         "server": { "port": 5150, "host": "http://localhost" },
@@ -374,13 +377,13 @@ pub async fn database() -> TestDb {
     TestDb { db, uri }
 }
 
-pub fn context(test_db: &TestDb, env: Environment, extra: Value) -> AppContext {
+pub fn context(test_db: &TestDb, env: Environment, extra: &Value) -> AppContext {
     AppContext::builder(env, test_db.db.clone(), config(&test_db.uri, extra)).build()
 }
 
 pub async fn setup() -> (TestDb, AppContext) {
     let test_db = database().await;
-    let ctx = context(&test_db, Environment::Test, json!({}));
+    let ctx = context(&test_db, Environment::Test, &json!({}));
     (test_db, ctx)
 }
 

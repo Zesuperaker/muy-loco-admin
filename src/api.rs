@@ -7,11 +7,13 @@ use std::{
 
 use axum::{
     Json, Router,
+    body::Body,
     extract::{FromRequestParts, Path, Query, State, rejection::JsonRejection},
     http::{HeaderValue, Method, StatusCode, header, request::Parts},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
+use futures_util::TryStreamExt;
 use loco_rs::app::AppContext;
 use serde::Deserialize;
 use serde_json::{Map, Value as JsonValue, json};
@@ -384,7 +386,10 @@ async fn export(
 ) -> AdminResult<Response> {
     let model = state.authorize(&user, &name, Operation::Export)?;
     let params = ListParams::from_query(&query)?;
-    let csv = model.resource.export(&state.0.ctx.db, &params).await?;
+    let csv = Arc::clone(&model.resource)
+        .export(&state.0.ctx.db, &params)
+        .await?
+        .inspect_err(|err| tracing::error!(error = %err, "CSV export failed"));
     let filename = format!(
         "attachment; filename=\"{}.csv\"",
         model.meta.name.replace('"', "")
@@ -399,7 +404,7 @@ async fn export(
             ),
             (header::CONTENT_DISPOSITION, disposition),
         ],
-        csv,
+        Body::from_stream(csv),
     )
         .into_response())
 }

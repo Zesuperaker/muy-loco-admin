@@ -1,15 +1,24 @@
 //! The type-erased model operations behind the admin API.
 
-use std::collections::{BTreeMap, HashSet};
+use std::{
+    collections::{BTreeMap, HashSet},
+    sync::Arc,
+};
 
 use async_trait::async_trait;
+use axum::body::Bytes;
+use futures_util::stream::{self, BoxStream, StreamExt};
 use loco_rs::app::AppContext;
 use sea_orm::{
-    ActiveModelBehavior, ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait,
-    DatabaseConnection, EntityTrait, IdenStatic, IntoActiveModel, Iterable, ModelTrait, Order,
-    PaginatorTrait, PrimaryKeyToColumn, PrimaryKeyTrait, QueryFilter, QueryOrder, QuerySelect,
-    RelationTrait, Select, TransactionTrait, Value,
-    sea_query::{Alias, ColumnType, Expr, ExprTrait, Func, LikeExpr, TableName, TableRef},
+    AccessMode, ActiveModelBehavior, ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait,
+    DatabaseConnection, DatabaseTransaction, DbBackend, DbErr, EntityTrait, IdenStatic, Identity,
+    IntoActiveModel, IsolationLevel, Iterable, ModelTrait, Order, PaginatorTrait,
+    PrimaryKeyToColumn, PrimaryKeyTrait, QueryFilter, QueryOrder, QuerySelect, RelationTrait,
+    Select, TransactionTrait, Value,
+    sea_query::{
+        Alias, ColumnType, Expr, ExprTrait, Func, IntoIden, LikeExpr, TableName, TableRef,
+        ValueTuple,
+    },
 };
 use serde::Serialize;
 use serde_json::{Map, Value as Json};
@@ -63,6 +72,9 @@ pub struct Choice {
     pub label: String,
 }
 
+/// A CSV export: the header, then one chunk per batch of rows.
+pub(crate) type CsvStream = BoxStream<'static, AdminResult<Bytes>>;
+
 /// Model operations used by the HTTP layer.
 #[async_trait]
 pub(crate) trait Resource: Send + Sync {
@@ -82,7 +94,12 @@ pub(crate) trait Resource: Send + Sync {
         input: Map<String, Json>,
     ) -> AdminResult<Record>;
     async fn delete(&self, db: &DatabaseConnection, keys: &[String]) -> AdminResult<u64>;
-    async fn export(&self, db: &DatabaseConnection, params: &ListParams) -> AdminResult<String>;
+    /// Stream the filtered records as CSV, in primary-key order.
+    async fn export(
+        self: Arc<Self>,
+        db: &DatabaseConnection,
+        params: &ListParams,
+    ) -> AdminResult<CsvStream>;
     async fn lookup(
         &self,
         db: &DatabaseConnection,
@@ -158,6 +175,37 @@ fn csv_cell(kind: FieldKind, text: String) -> String {
         format!("'{text}")
     } else {
         text
+    }
+}
+
+fn csv_chunk<R>(rows: impl IntoIterator<Item = R>) -> AdminResult<Bytes>
+where
+    R: IntoIterator,
+    R::Item: AsRef<[u8]>,
+{
+    let internal = |e: &dyn std::fmt::Display| AdminError::Internal(e.to_string());
+    let mut writer = csv::Writer::from_writer(Vec::new());
+    for row in rows {
+        writer.write_record(row).map_err(|e| internal(&e))?;
+    }
+    writer
+        .into_inner()
+        .map(Bytes::from)
+        .map_err(|e| internal(&e))
+}
+
+/// A read-only transaction over one snapshot of the data, so rows changed
+/// during an export are neither skipped nor repeated. SQLite read
+/// transactions are snapshots already and take no options.
+async fn snapshot(db: &DatabaseConnection) -> Result<DatabaseTransaction, DbErr> {
+    if db.get_database_backend() == DbBackend::Postgres {
+        db.begin_with_config(
+            Some(IsolationLevel::RepeatableRead),
+            Some(AccessMode::ReadOnly),
+        )
+        .await
+    } else {
+        db.begin().await
     }
 }
 
@@ -573,6 +621,53 @@ where
     }
 }
 
+/// A running export, read in keyset-paginated batches inside one snapshot.
+struct Export<E: EntityTrait> {
+    resource: Arc<ModelResource<E>>,
+    query: Select<E>,
+    txn: Option<DatabaseTransaction>,
+    /// Primary key of the last exported row.
+    after: Option<Vec<Value>>,
+}
+
+impl<E> Export<E>
+where
+    E: EntityTrait + Sync,
+    E::Model: Sync,
+{
+    /// The next batch as CSV rows, or `None` when every row was sent.
+    async fn next(mut self) -> AdminResult<Option<(Bytes, Self)>> {
+        let models = {
+            let Some(txn) = self.txn.as_ref() else {
+                return Ok(None);
+            };
+            let pk = self.resource.pk.iter().map(|c| c.into_iden()).collect();
+            let mut cursor = self.query.clone().cursor_by(Identity::Many(pk));
+            cursor.first(EXPORT_BATCH);
+            if let Some(after) = self.after.take() {
+                cursor.after(ValueTuple::Many(after));
+            }
+            cursor.all(txn).await?
+        };
+        if (models.len() as u64) < EXPORT_BATCH
+            && let Some(txn) = self.txn.take()
+        {
+            txn.commit().await?;
+        }
+        let Some(last) = models.last() else {
+            return Ok(None);
+        };
+        self.after = Some(self.resource.pk.iter().map(|c| last.get(*c)).collect());
+        let chunk = csv_chunk(models.iter().map(|model| {
+            self.resource
+                .columns
+                .iter()
+                .map(|c| csv_cell(c.kind, to_text(&model.get(c.col))))
+        }))?;
+        Ok(Some((chunk, self)))
+    }
+}
+
 #[async_trait]
 impl<E> Resource for ModelResource<E>
 where
@@ -646,28 +741,22 @@ where
         Ok(keys.len() as u64)
     }
 
-    async fn export(&self, db: &DatabaseConnection, params: &ListParams) -> AdminResult<String> {
-        let internal = |e: csv::Error| AdminError::Internal(e.to_string());
-        let mut writer = csv::Writer::from_writer(Vec::new());
-        writer
-            .write_record(self.columns.iter().map(|c| c.name.as_str()))
-            .map_err(internal)?;
-        let mut pages = self.ordered(params)?.paginate(db, EXPORT_BATCH);
-        while let Some(batch) = pages.fetch_and_next().await? {
-            for model in batch {
-                writer
-                    .write_record(
-                        self.columns
-                            .iter()
-                            .map(|c| csv_cell(c.kind, to_text(&model.get(c.col)))),
-                    )
-                    .map_err(internal)?;
-            }
-        }
-        let bytes = writer
-            .into_inner()
-            .map_err(|e| AdminError::Internal(e.to_string()))?;
-        String::from_utf8(bytes).map_err(|e| AdminError::Internal(e.to_string()))
+    async fn export(
+        self: Arc<Self>,
+        db: &DatabaseConnection,
+        params: &ListParams,
+    ) -> AdminResult<CsvStream> {
+        let query = self.query(params)?;
+        let header = csv_chunk([self.columns.iter().map(|c| c.name.as_str())])?;
+        let export = Export {
+            txn: Some(snapshot(db).await?),
+            resource: self,
+            query,
+            after: None,
+        };
+        Ok(stream::once(async { Ok(header) })
+            .chain(stream::try_unfold(export, Export::next))
+            .boxed())
     }
 
     async fn lookup(

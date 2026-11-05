@@ -7,7 +7,7 @@ hooks and validation run.
 - List with pagination, sorting, search and filters
 - Create, edit and delete; bulk delete and custom bulk actions
 - Foreign keys as links and searchable pickers; links to related records
-- CSV export
+- CSV export, streamed in primary-key order from one consistent snapshot
 - Composite and UUID primary keys, Postgres enums, JSON columns
 
 Requires Loco 1.2+, Rust 1.94+ and Postgres or SQLite.

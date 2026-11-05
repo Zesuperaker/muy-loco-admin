@@ -22,7 +22,10 @@ if (root) {
   createRoot(root).render(
     <StrictMode>
       <QueryClientProvider client={queryClient}>
-        <BrowserRouter basename={basePath()}>
+        {/* Location updates must commit before the next event: list controls
+            build the next URL from the current one, and a pending transition
+            would make them undo the previous change (e.g. a cleared search). */}
+        <BrowserRouter basename={basePath()} useTransitions={false}>
           <ToastProvider>
             <App />
           </ToastProvider>

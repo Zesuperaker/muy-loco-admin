@@ -188,7 +188,7 @@ export function renderApp(path = "/admin") {
   });
   return render(
     <QueryClientProvider client={client}>
-      <MemoryRouter basename="/admin" initialEntries={[path]}>
+      <MemoryRouter basename="/admin" initialEntries={[path]} useTransitions={false}>
         <ToastProvider>
           <App />
           <LocationProbe />

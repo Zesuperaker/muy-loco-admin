@@ -1,7 +1,7 @@
 # Build context: the repository root (the app depends on the crate at `..`).
 FROM rust:1.99.1-slim-trixie AS builder
 WORKDIR /src
-COPY Cargo.toml build.rs ./
+COPY Cargo.toml ./
 COPY src ./src
 COPY frontend/dist ./frontend/dist
 COPY dogfood ./dogfood

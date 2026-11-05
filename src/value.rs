@@ -8,6 +8,7 @@
 
 use std::str::FromStr;
 
+use percent_encoding::{AsciiSet, CONTROLS, percent_decode_str, utf8_percent_encode};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, EntityTrait, Value,
     prelude::{
@@ -424,11 +425,14 @@ where
     })
 }
 
+/// Characters escaped in each part of a record key.
+const KEY_PART: &AsciiSet = &CONTROLS.add(b'%').add(b',');
+
 /// Encode primary-key values into a single URL-friendly record key.
 pub(crate) fn encode_key(values: &[Value]) -> String {
     values
         .iter()
-        .map(|v| to_text(v).replace('%', "%25").replace(',', "%2C"))
+        .map(|v| utf8_percent_encode(&to_text(v), KEY_PART).to_string())
         .collect::<Vec<_>>()
         .join(",")
 }
@@ -436,29 +440,7 @@ pub(crate) fn encode_key(values: &[Value]) -> String {
 /// Split a record key produced by [`encode_key`] into its parts.
 pub(crate) fn decode_key(key: &str) -> Vec<String> {
     key.split(',')
-        .map(|part| {
-            let mut out = String::with_capacity(part.len());
-            let mut rest = part;
-            while let Some(idx) = rest.find('%') {
-                out.push_str(&rest[..idx]);
-                let tail = &rest[idx..];
-                if let Some(after) = tail
-                    .strip_prefix("%2C")
-                    .or_else(|| tail.strip_prefix("%2c"))
-                {
-                    out.push(',');
-                    rest = after;
-                } else if let Some(after) = tail.strip_prefix("%25") {
-                    out.push('%');
-                    rest = after;
-                } else {
-                    out.push('%');
-                    rest = &tail[1..];
-                }
-            }
-            out.push_str(rest);
-            out
-        })
+        .map(|part| percent_decode_str(part).decode_utf8_lossy().into_owned())
         .collect()
 }
 
@@ -772,6 +754,7 @@ mod tests {
             Value::String(Some("a,b%c".into())),
             Value::String(Some("%2C".into())),
         ]);
+        assert_eq!(key, "a%2Cb%25c,%252C");
         assert_eq!(decode_key(&key), vec!["a,b%c", "%2C"]);
         assert_eq!(decode_key("50%"), vec!["50%"]);
         assert_eq!(decode_key("a%2cb"), vec!["a,b"]);

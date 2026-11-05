@@ -7,7 +7,7 @@ Admin dashboard crate for Loco apps. See `README.md` for usage.
 - `src/` crate: `admin.rs` (builder, initializer), `api.rs` (HTTP handlers), `resource.rs`
   (SeaORM operations), `value.rs` (value/JSON conversion), `auth.rs`, `meta.rs`, `assets.rs`
 - `tests/` crate integration tests; `tests/common` holds test entities and the HTTP client
-- `frontend/` React UI; `frontend/dist` is embedded by `build.rs` and committed
+- `frontend/` React UI; `frontend/dist` is embedded with `rust-embed` and committed
 - `dogfood/` Loco app using the crate (Postgres, Docker); `dogfood/e2e/` Playwright tests
 
 ## Checks

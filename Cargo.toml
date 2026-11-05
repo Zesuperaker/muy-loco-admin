@@ -11,7 +11,6 @@ keywords = ["loco", "admin", "dashboard", "sea-orm", "axum"]
 categories = ["web-programming", "web-programming::http-server"]
 include = [
     "/src/**/*.rs",
-    "/build.rs",
     "/frontend/dist/**",
     "/Cargo.toml",
     "/README.md",
@@ -38,8 +37,11 @@ axum = { version = "0.8.1", default-features = false, features = ["json", "query
 async-trait = "0.1.74"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+thiserror = "2"
 tracing = "0.1.40"
 csv = "1.4.0"
+percent-encoding = "2.3.2"
+rust-embed = { version = "8.13.0", features = ["debug-embed", "mime-guess"] }
 
 [dev-dependencies]
 loco-rs = { version = "=1.2.0", default-features = false, features = ["with-db", "auth"] }

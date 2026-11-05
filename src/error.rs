@@ -15,26 +15,34 @@ use serde_json::json;
 pub type FieldErrors = BTreeMap<String, Vec<String>>;
 
 /// An error produced while serving an admin request.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum AdminError {
     /// No valid credentials were presented (401).
+    #[error("authentication required")]
     Unauthenticated,
     /// Credentials are valid but the operation is not permitted (403).
+    #[error("you do not have permission to perform this action")]
     Forbidden,
     /// The model or record does not exist (404).
+    #[error("not found")]
     NotFound,
     /// The request is malformed (400).
+    #[error("{0}")]
     BadRequest(String),
     /// The request body exceeds the app's payload limit (413).
+    #[error("request body is too large")]
     PayloadTooLarge,
     /// The submitted data was rejected (422).
+    #[error("{message}")]
     Validation {
         message: String,
         fields: FieldErrors,
     },
     /// A database constraint was violated (409).
+    #[error("{0}")]
     Conflict(String),
     /// An unexpected failure (500). The message is logged, not returned.
+    #[error("internal error: {0}")]
     Internal(String),
 }
 
@@ -58,30 +66,14 @@ impl AdminError {
         }
     }
 
+    /// The message sent to the client; internal details are not exposed.
     fn message(&self) -> String {
         match self {
-            Self::Unauthenticated => "authentication required".to_string(),
-            Self::Forbidden => "you do not have permission to perform this action".to_string(),
-            Self::NotFound => "not found".to_string(),
-            Self::PayloadTooLarge => "request body is too large".to_string(),
-            Self::BadRequest(m) | Self::Conflict(m) | Self::Validation { message: m, .. } => {
-                m.clone()
-            }
             Self::Internal(_) => "internal server error".to_string(),
+            other => other.to_string(),
         }
     }
 }
-
-impl std::fmt::Display for AdminError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Internal(m) => write!(f, "internal error: {m}"),
-            other => f.write_str(&other.message()),
-        }
-    }
-}
-
-impl std::error::Error for AdminError {}
 
 impl IntoResponse for AdminError {
     fn into_response(self) -> Response {

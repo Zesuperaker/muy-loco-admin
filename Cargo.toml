@@ -1,0 +1,62 @@
+[package]
+name = "muy-loco-admin"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.94"
+license = "Apache-2.0"
+description = "An auto-generated admin dashboard for Loco apps, driven by SeaORM entity metadata"
+repository = "https://github.com/zesuperaker/muy-loco-admin"
+readme = "README.md"
+keywords = ["loco", "admin", "dashboard", "sea-orm", "axum"]
+categories = ["web-programming", "web-programming::http-server"]
+include = [
+    "/src/**/*.rs",
+    "/build.rs",
+    "/frontend/dist/**",
+    "/Cargo.toml",
+    "/README.md",
+    "/LICENSE",
+]
+
+[features]
+default = ["jwt"]
+# `JwtAuth`: authenticate admin users with Loco's JWT auth.
+jwt = ["loco-rs/auth"]
+
+# Version floors mirror loco-rs 1.2.0's own requirements; crates loco-rs does
+# not depend on use their latest release as the floor.
+[dependencies]
+loco-rs = { version = "1.2.0", default-features = false, features = ["with-db"] }
+sea-orm = { version = "2.0", default-features = false, features = [
+    "macros",
+    "with-json",
+    "with-chrono",
+    "with-uuid",
+    "with-rust_decimal",
+] }
+axum = { version = "0.8.1", default-features = false, features = ["json", "query"] }
+async-trait = "0.1.74"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1.40"
+csv = "1.4.0"
+
+[dev-dependencies]
+loco-rs = { version = "=1.2.0", default-features = false, features = ["with-db", "auth"] }
+sea-orm = { version = "=2.0.4", features = [
+    "sqlx-sqlite",
+    "sqlx-postgres",
+    "runtime-tokio-rustls",
+    "macros",
+] }
+tokio = { version = "=1.54.1", features = ["macros", "rt-multi-thread"] }
+tower = { version = "=0.5.3", features = ["util"] }
+http-body-util = "=0.1.5"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"

@@ -3,6 +3,7 @@
 use std::{
     collections::{BTreeMap, HashSet},
     sync::Arc,
+    time::Duration,
 };
 
 use async_trait::async_trait;
@@ -94,11 +95,13 @@ pub(crate) trait Resource: Send + Sync {
         input: Map<String, Json>,
     ) -> AdminResult<Record>;
     async fn delete(&self, db: &DatabaseConnection, keys: &[String]) -> AdminResult<u64>;
-    /// Stream the filtered records as CSV, in primary-key order.
+    /// Stream the filtered records as CSV, in primary-key order. The database
+    /// ends the export's transaction if it stays idle for `idle_limit`.
     async fn export(
         self: Arc<Self>,
         db: &DatabaseConnection,
         params: &ListParams,
+        idle_limit: Duration,
     ) -> AdminResult<CsvStream>;
     async fn lookup(
         &self,
@@ -197,16 +200,28 @@ where
 /// A read-only transaction over one snapshot of the data, so rows changed
 /// during an export are neither skipped nor repeated. SQLite read
 /// transactions are snapshots already and take no options.
-async fn snapshot(db: &DatabaseConnection) -> Result<DatabaseTransaction, DbErr> {
-    if db.get_database_backend() == DbBackend::Postgres {
-        db.begin_with_config(
+///
+/// On Postgres the transaction is also ended by the server if it sits idle
+/// for `idle_limit`, as a backstop for the export's own idle timeout.
+async fn snapshot(
+    db: &DatabaseConnection,
+    idle_limit: Duration,
+) -> Result<DatabaseTransaction, DbErr> {
+    if db.get_database_backend() != DbBackend::Postgres {
+        return db.begin().await;
+    }
+    let txn = db
+        .begin_with_config(
             Some(IsolationLevel::RepeatableRead),
             Some(AccessMode::ReadOnly),
         )
-        .await
-    } else {
-        db.begin().await
-    }
+        .await?;
+    txn.execute_unprepared(&format!(
+        "SET LOCAL idle_in_transaction_session_timeout = {}",
+        idle_limit.as_millis()
+    ))
+    .await?;
+    Ok(txn)
 }
 
 /// Empty strings mean "no value" for non-text fields.
@@ -745,11 +760,12 @@ where
         self: Arc<Self>,
         db: &DatabaseConnection,
         params: &ListParams,
+        idle_limit: Duration,
     ) -> AdminResult<CsvStream> {
         let query = self.query(params)?;
         let header = csv_chunk([self.columns.iter().map(|c| c.name.as_str())])?;
         let export = Export {
-            txn: Some(snapshot(db).await?),
+            txn: Some(snapshot(db, idle_limit).await?),
             resource: self,
             query,
             after: None,
@@ -843,6 +859,31 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn snapshot_is_a_guarded_read_only_snapshot() {
+        let url = std::env::var("DATABASE_URL").unwrap_or_default();
+        if !url.starts_with("postgres") {
+            return;
+        }
+        let db = sea_orm::Database::connect(&url).await.unwrap();
+        let txn = snapshot(&db, Duration::from_millis(1_500)).await.unwrap();
+        let mut settings = Vec::new();
+        for name in [
+            "transaction_isolation",
+            "transaction_read_only",
+            "idle_in_transaction_session_timeout",
+        ] {
+            let sql = format!("SHOW {name}");
+            let row = txn
+                .query_one_raw(sea_orm::Statement::from_string(DbBackend::Postgres, sql))
+                .await
+                .unwrap()
+                .unwrap();
+            settings.push(row.try_get_by_index::<String>(0).unwrap());
+        }
+        assert_eq!(settings, ["repeatable read", "on", "1500ms"]);
+    }
 
     #[test]
     fn like_patterns_are_escaped() {

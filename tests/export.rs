@@ -5,11 +5,14 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
+use std::time::Duration;
+
 use common::{create_post, create_user, is_postgres, post_tags, posts, setup, users};
 use http_body_util::BodyExt;
 use muy_loco_admin::{Admin, AllowAll};
 use sea_orm::{
-    ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set,
+    ColumnTrait, ConnectionTrait, DatabaseConnection, DbBackend, EntityTrait, PaginatorTrait,
+    QueryFilter, Set, Statement,
     prelude::{ChronoUtc, Decimal},
 };
 use tower::ServiceExt;
@@ -93,6 +96,10 @@ async fn streams_every_row_once_in_key_order() {
         chunks.len(),
         1 + 3,
         "header plus batches of 500, 500 and 201"
+    );
+    assert!(
+        body.frame().await.is_none(),
+        "polling a finished export again is safe"
     );
     assert!(chunks[0].starts_with("id,title,"));
 
@@ -193,4 +200,87 @@ async fn reads_one_snapshot_while_rows_change() {
         !rest.contains("after "),
         "rows added during the export are not included"
     );
+}
+
+/// Sessions left inside a transaction (Postgres only).
+async fn open_transactions(db: &DatabaseConnection) -> i64 {
+    let sql = "SELECT count(*) FROM pg_stat_activity \
+               WHERE datname = current_database() AND state LIKE 'idle in transaction%'";
+    db.query_one_raw(Statement::from_string(DbBackend::Postgres, sql))
+        .await
+        .unwrap()
+        .unwrap()
+        .try_get_by_index(0)
+        .unwrap()
+}
+
+#[tokio::test]
+async fn stalled_download_is_stopped_and_releases_its_transaction() {
+    let (db, ctx) = setup().await;
+    let ann = create_user(&db.db, "ann@example.com", true).await;
+    insert_posts(&db.db, ann.id, 1_600, "bulk").await;
+    let router = Admin::new(AllowAll)
+        .model::<posts::Entity>()
+        .export_idle_timeout(Duration::from_millis(200))
+        .router(&ctx)
+        .unwrap();
+
+    let mut body = export_body(&router, "/api/models/posts/export").await;
+    assert!(next_chunk(&mut body).await.unwrap().starts_with("id,"));
+
+    // Stop reading. The export gives up and frees its connection.
+    tokio::time::sleep(Duration::from_millis(800)).await;
+    if is_postgres() {
+        let mut open = open_transactions(&db.db).await;
+        for _ in 0..20 {
+            if open == 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            open = open_transactions(&db.db).await;
+        }
+        assert_eq!(open, 0, "the export's transaction is closed");
+    }
+    // The SQLite pool has one connection, so this only succeeds once it is free.
+    let count = tokio::time::timeout(Duration::from_secs(2), posts::Entity::find().count(&db.db))
+        .await
+        .expect("the export released its connection")
+        .unwrap();
+    assert_eq!(count, 1_600);
+
+    // Reading on yields what was already handed over, then an error rather
+    // than a clean end, so the client cannot mistake it for a full file.
+    let mut rows = 0;
+    let mut failed = false;
+    while let Some(frame) = body.frame().await {
+        let Ok(frame) = frame else {
+            failed = true;
+            break;
+        };
+        rows += frame
+            .into_data()
+            .map_or(0, |d| d.split(|b| *b == b'\n').count() - 1);
+    }
+    assert!(failed, "the response ends with an error");
+    assert!(rows < 1_600, "{rows} rows");
+}
+
+#[tokio::test]
+async fn slow_clients_within_the_limit_get_everything() {
+    let (db, ctx) = setup().await;
+    let ann = create_user(&db.db, "ann@example.com", true).await;
+    insert_posts(&db.db, ann.id, 1_100, "bulk").await;
+    let router = Admin::new(AllowAll)
+        .model::<posts::Entity>()
+        .export_idle_timeout(Duration::from_millis(500))
+        .router(&ctx)
+        .unwrap();
+
+    let mut body = export_body(&router, "/api/models/posts/export").await;
+    let mut lines = 0;
+    while let Some(chunk) = next_chunk(&mut body).await {
+        lines += chunk.lines().count();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(lines, 1 + 1_100);
 }

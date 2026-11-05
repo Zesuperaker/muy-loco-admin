@@ -2,18 +2,22 @@
 
 use std::{
     collections::{BTreeMap, HashMap},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
 };
 
 use axum::{
     Json, Router,
-    body::Body,
+    body::{Body, Bytes},
     extract::{FromRequestParts, Path, Query, State, rejection::JsonRejection},
     http::{HeaderValue, Method, StatusCode, header, request::Parts},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use futures_util::TryStreamExt;
+use futures_util::{StreamExt, stream};
 use loco_rs::app::AppContext;
 use serde::Deserialize;
 use serde_json::{Map, Value as JsonValue, json};
@@ -23,7 +27,7 @@ use crate::{
     error::{AdminError, AdminResult},
     meta::{Capabilities, ModelMeta},
     query::ListParams,
-    resource::{Record, Resource},
+    resource::{CsvStream, Record, Resource},
 };
 
 /// Header every mutating request must carry, so cross-site forms cannot
@@ -43,6 +47,7 @@ pub(crate) struct Model {
 
 pub(crate) struct Inner {
     pub title: String,
+    pub export_idle_timeout: Duration,
     pub base_path: String,
     pub auth: Arc<dyn AdminAuth>,
     pub models: Vec<Model>,
@@ -386,10 +391,10 @@ async fn export(
 ) -> AdminResult<Response> {
     let model = state.authorize(&user, &name, Operation::Export)?;
     let params = ListParams::from_query(&query)?;
+    let idle = state.0.export_idle_timeout;
     let csv = Arc::clone(&model.resource)
-        .export(&state.0.ctx.db, &params)
-        .await?
-        .inspect_err(|err| tracing::error!(error = %err, "CSV export failed"));
+        .export(&state.0.ctx.db, &params, idle.saturating_mul(2))
+        .await?;
     let filename = format!(
         "attachment; filename=\"{}.csv\"",
         model.meta.name.replace('"', "")
@@ -404,9 +409,55 @@ async fn export(
             ),
             (header::CONTENT_DISPOSITION, disposition),
         ],
-        Body::from_stream(csv),
+        spawn_export(csv, idle),
     )
         .into_response())
+}
+
+/// Run `csv` in its own task and hand chunks to the response one at a time.
+///
+/// A stalled download stops the server from reading the response body, so a
+/// timeout inside the body would never fire. Here the task waits at most
+/// `idle` for the database to produce a chunk and for the client to take it;
+/// otherwise it stops, which rolls the export's transaction back and frees
+/// its connection. A response that ends early is aborted with an error, so
+/// the client never mistakes it for a complete file.
+fn spawn_export(mut csv: CsvStream, idle: Duration) -> Body {
+    let (tx, rx) = tokio::sync::mpsc::channel::<Bytes>(1);
+    let finished = Arc::new(AtomicBool::new(false));
+    let done = Arc::clone(&finished);
+    tokio::spawn(async move {
+        loop {
+            let chunk = match tokio::time::timeout(idle, csv.next()).await {
+                Ok(Some(Ok(chunk))) => chunk,
+                Ok(None) => return done.store(true, Ordering::Release),
+                Ok(Some(Err(err))) => return tracing::error!(error = %err, "CSV export failed"),
+                Err(_) => return tracing::warn!("CSV export stopped: no rows from the database"),
+            };
+            match tokio::time::timeout(idle, tx.send(chunk)).await {
+                Ok(Ok(())) => {}
+                Ok(Err(_)) => return,
+                Err(_) => return tracing::warn!("CSV export stopped: the client stopped reading"),
+            }
+        }
+    });
+    Body::from_stream(
+        stream::unfold(Some((rx, finished)), |state| async move {
+            let (mut rx, finished) = state?;
+            match rx.recv().await {
+                Some(chunk) => Some((Ok(chunk), Some((rx, finished)))),
+                None if finished.load(Ordering::Acquire) => None,
+                None => Some((
+                    Err(AdminError::Internal(
+                        "CSV export did not finish".to_string(),
+                    )),
+                    None,
+                )),
+            }
+        })
+        // Middleware such as compression may poll the body again after its end.
+        .fuse(),
+    )
 }
 
 #[derive(Deserialize)]

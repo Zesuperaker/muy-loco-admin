@@ -1,6 +1,6 @@
 //! The [`Admin`] builder and its Loco initializer.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use axum::{
@@ -28,6 +28,7 @@ use crate::{
 };
 
 const DEFAULT_PATH: &str = "/admin";
+const DEFAULT_EXPORT_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 /// Loco middlewares that install routes or fallbacks instead of wrapping
 /// requests; they would shadow the admin's own routes.
 const SKIPPED_MIDDLEWARES: &[&str] = &["fallback", "static"];
@@ -71,6 +72,7 @@ pub struct Admin {
     resources: Vec<Arc<dyn Resource>>,
     errors: Vec<String>,
     middlewares: MiddlewareStack,
+    export_idle_timeout: Duration,
 }
 
 /// Builds the Loco middleware stack, like `Hooks::middlewares`.
@@ -137,6 +139,7 @@ impl Admin {
             resources: Vec::new(),
             errors: Vec::new(),
             middlewares: default_middleware_stack,
+            export_idle_timeout: DEFAULT_EXPORT_IDLE_TIMEOUT,
         }
     }
 
@@ -153,6 +156,15 @@ impl Admin {
     #[must_use]
     pub fn title(mut self, title: impl Into<String>) -> Self {
         self.title = title.into();
+        self
+    }
+
+    /// How long a CSV export may wait for the client to take the next chunk
+    /// (or for the database to produce it) before it is stopped and its
+    /// transaction rolled back. Defaults to 60 seconds.
+    #[must_use]
+    pub fn export_idle_timeout(mut self, timeout: Duration) -> Self {
+        self.export_idle_timeout = timeout;
         self
     }
 
@@ -262,6 +274,7 @@ impl Admin {
             .collect();
         let state = AdminState(Arc::new(Inner {
             title: title.to_string(),
+            export_idle_timeout: self.export_idle_timeout,
             base_path,
             auth: Arc::clone(&self.auth),
             models,

@@ -5,8 +5,19 @@ entities.
 
 ## Quickstart
 
-Requires Loco 1.2+, Rust 1.94+ and Postgres or SQLite. The steps assume an app from Loco's SaaS
+Requires Loco 1.2+, Rust 1.94+ and Postgres or SQLite. The steps use an app from Loco's SaaS
 starter.
+
+> [!TIP]
+> Starting a new app? Create it from the SaaS starter:
+>
+> ```sh
+> cargo install loco
+> loco new --name myapp --db sqlite --bg async --assets serverside
+> ```
+>
+> Use `--db postgres` for Postgres. Every Loco template with a database includes the user auth
+> these steps rely on.
 
 Add the crate:
 
@@ -15,30 +26,35 @@ Add the crate:
 muy-loco-admin = "0.1"
 ```
 
-Give `users` an `is_admin` column:
+Give `users` an `is_admin` column (`db entities` runs `sea-orm-cli`):
 
 ```sh
+cargo install sea-orm-cli
 cargo loco generate migration AddIsAdminToUsers is_admin:bool
 cargo loco db migrate
 cargo loco db entities
 ```
 
-Register the admin and its `admin:promote` task in `src/app.rs`:
+Add the admin to the app's initializers and its `admin:promote` task to the app's tasks, in
+`src/app.rs`:
 
 ```rust
 use muy_loco_admin::{auth::JwtAuth, Admin, ModelAdmin, PromoteAdmin};
 
 // inside `impl Hooks for App`
 async fn initializers(_ctx: &AppContext) -> Result<Vec<Box<dyn Initializer>>> {
-    Ok(vec![Box::new(
-        Admin::new(
-            JwtAuth::<users::Model>::new(|user| user.is_admin == Some(true))
-                .login_endpoint("/api/auth/login"), // your app's login route
-        )
-        .register(ModelAdmin::<users::Entity>::new().can_create(false))
-        .model::<articles::Entity>() // one line per model to manage
-        .middlewares_from::<Self>(),
-    )])
+    Ok(vec![
+        // ...the app's existing initializers
+        Box::new(
+            Admin::new(
+                JwtAuth::<users::Model>::new(|user| user.is_admin == Some(true))
+                    .login_endpoint("/api/auth/login"), // your app's login route
+            )
+            .register(ModelAdmin::<users::Entity>::new().can_create(false))
+            // .model::<articles::Entity>() for each of your other models
+            .middlewares_from::<Self>(),
+        ),
+    ])
 }
 
 fn register_tasks(tasks: &mut Tasks) {
@@ -59,6 +75,9 @@ Open `/admin` and sign in. The login form posts `email` and `password` as JSON t
 endpoint and reads `token` from the reply, like the Loco SaaS starter's `/api/auth/login` (the
 default). For other field names, or to send users to your own login page, use
 `JwtAuth::login_method`.
+
+Not on the SaaS starter? Create users however your app does, then run `admin:promote`. If your
+app does not use Loco's JWT auth, implement `AdminAuth` (see [Authentication](#authentication)).
 
 ## Features
 

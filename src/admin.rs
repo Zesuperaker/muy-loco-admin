@@ -7,7 +7,7 @@ use axum::{
     Router,
     http::{HeaderValue, header},
     middleware::map_response,
-    response::Response,
+    response::{Redirect, Response},
     routing::get,
 };
 use loco_rs::{
@@ -270,7 +270,11 @@ impl Initializer for Admin {
         let admin = self.build(ctx, path, title)?;
         let mount = validate_path(path).map_err(|e| Error::string(&e))?;
         tracing::info!(path = %mount, models = self.resources.len(), "admin mounted");
-        Ok(router.nest(&mount, admin))
+        let canonical = mount.clone();
+        Ok(router.nest(&mount, admin).route(
+            &format!("{mount}/"),
+            get(move || async move { Redirect::permanent(&canonical) }),
+        ))
     }
 }
 

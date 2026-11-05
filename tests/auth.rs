@@ -1,0 +1,290 @@
+mod common;
+
+use async_trait::async_trait;
+use axum::http::{Method, request::Parts};
+use common::{
+    Client, JWT_SECRET, context, create_post, create_user, database, posts, setup, users,
+};
+use loco_rs::{app::AppContext, auth::jwt::JWT, environment::Environment};
+use muy_loco_admin::{
+    Access, Admin, AdminAuth, AdminUser, AllowAll, AuthError, FormLogin, LoginMethod, ModelAdmin,
+    Operation, auth::JwtAuth,
+};
+use serde_json::{Map, json};
+
+fn token(pid: &str) -> String {
+    JWT::new(JWT_SECRET)
+        .generate_token(3600, pid.to_string(), Map::new())
+        .expect("token")
+}
+
+fn jwt_admin() -> Admin {
+    Admin::new(
+        JwtAuth::<users::Model>::new(|user| user.is_admin)
+            .display_name(|user| user.email.clone())
+            .permissions(|user, access| {
+                user.email.starts_with("root") || access.operation == Operation::View
+            }),
+    )
+    .model::<users::Entity>()
+    .register(
+        ModelAdmin::<posts::Entity>::new()
+            .action("noop", "Noop", |_, _| async { Ok("done".to_string()) }),
+    )
+}
+
+#[tokio::test]
+async fn jwt_auth_flow() {
+    let (db, ctx) = setup().await;
+    let router = jwt_admin().router(&ctx).unwrap();
+    let anonymous = Client::new(router.clone());
+
+    let config = anonymous.get("/api/config").await.json();
+    assert_eq!(config["login"]["type"], "form");
+    assert_eq!(config["login"]["endpoint"], "/api/auth/login");
+
+    assert_eq!(anonymous.get("/api/me").await.status, 401);
+    assert_eq!(
+        anonymous.get("/api/schema").await.json()["error"],
+        "authentication required"
+    );
+    let garbage = anonymous.clone().with_token("not-a-jwt");
+    assert_eq!(garbage.get("/api/me").await.status, 401);
+    let unknown = anonymous
+        .clone()
+        .with_token(token("00000000-0000-0000-0000-00000000ffff"));
+    assert_eq!(unknown.get("/api/me").await.status, 401);
+    let broken = anonymous.clone().with_token(token("explode"));
+    assert_eq!(broken.get("/api/me").await.status, 500);
+
+    let regular = create_user(&db.db, "joe@example.com", false).await;
+    let joe = anonymous
+        .clone()
+        .with_token(token(&regular.pid.to_string()));
+    assert_eq!(joe.get("/api/me").await.status, 403);
+
+    let staff = create_user(&db.db, "staff@example.com", true).await;
+    let staff_client = anonymous.clone().with_token(token(&staff.pid.to_string()));
+    let me = staff_client.get("/api/me").await.json();
+    assert_eq!(
+        me,
+        json!({"id": staff.pid.to_string(), "name": "staff@example.com"})
+    );
+
+    let root = create_user(&db.db, "root@example.com", true).await;
+    let root_client = anonymous.with_token(token(&root.pid.to_string()));
+    let post = create_post(&db.db, root.id, "p").await;
+
+    // Staff may only view.
+    let schema = staff_client.get("/api/schema").await.json();
+    let caps = &schema["models"][1]["capabilities"];
+    assert_eq!(
+        caps,
+        &json!({"view": true, "create": false, "update": false, "delete": false, "export": false})
+    );
+    assert_eq!(schema["models"][1]["actions"], json!([]));
+    assert_eq!(
+        staff_client.get("/api/models/posts/records").await.status,
+        200
+    );
+    let res = staff_client
+        .patch(
+            &format!("/api/models/posts/records/{}", post.id),
+            json!({"title": "x"}),
+        )
+        .await;
+    assert_eq!(res.status, 403);
+    let res = staff_client
+        .post(
+            "/api/models/posts/actions/noop",
+            json!({"keys": [post.id.to_string()]}),
+        )
+        .await;
+    assert_eq!(res.status, 403);
+    assert_eq!(
+        staff_client.get("/api/models/posts/export").await.status,
+        403
+    );
+
+    // Root may do everything.
+    let schema = root_client.get("/api/schema").await.json();
+    assert_eq!(schema["models"][1]["capabilities"]["delete"], true);
+    assert_eq!(schema["models"][1]["actions"][0]["name"], "noop");
+    let res = root_client
+        .post(
+            "/api/models/posts/actions/noop",
+            json!({"keys": [post.id.to_string()]}),
+        )
+        .await;
+    assert_eq!(res.json()["message"], "done");
+}
+
+#[tokio::test]
+async fn jwt_token_from_configured_cookie() {
+    let test_db = database().await;
+    let ctx = context(
+        &test_db,
+        Environment::Test,
+        json!({"auth": {"jwt": {
+            "secret": JWT_SECRET,
+            "expiration": 3600,
+            "location": {"from": "Cookie", "name": "session"}
+        }}}),
+    );
+    let router = Admin::new(JwtAuth::<users::Model>::new(|_| true))
+        .model::<users::Entity>()
+        .router(&ctx)
+        .unwrap();
+    let user = create_user(&test_db.db, "ann@example.com", false).await;
+    let cookie = format!("session={}", token(&user.pid.to_string()));
+    let res = Client::new(router.clone())
+        .send_raw(Method::GET, "/api/me", None, vec![("cookie", &cookie)])
+        .await;
+    assert_eq!(res.status, 200, "{}", res.text());
+    assert_eq!(
+        res.json()["name"],
+        user.pid.to_string(),
+        "defaults to the pid"
+    );
+
+    let bearer = Client::new(router).with_token(token(&user.pid.to_string()));
+    assert_eq!(
+        bearer.get("/api/me").await.status,
+        200,
+        "bearer header still works"
+    );
+}
+
+#[tokio::test]
+async fn jwt_without_config_is_an_error() {
+    let test_db = database().await;
+    let ctx = context(&test_db, Environment::Test, json!({"auth": null}));
+    let router = Admin::new(JwtAuth::<users::Model>::new(|_| true).login_method(
+        LoginMethod::Redirect {
+            url: "/login".into(),
+        },
+    ))
+    .model::<users::Entity>()
+    .router(&ctx)
+    .unwrap();
+    let client = Client::new(router).with_token("x");
+    assert_eq!(client.get("/api/me").await.status, 500);
+    let config = client.get("/api/config").await.json();
+    assert_eq!(
+        config["login"],
+        json!({"type": "redirect", "url": "/login"})
+    );
+}
+
+#[tokio::test]
+async fn allow_all_refuses_production() {
+    let test_db = database().await;
+    let ctx = context(&test_db, Environment::Production, json!({}));
+    let router = Admin::new(AllowAll)
+        .model::<users::Entity>()
+        .router(&ctx)
+        .unwrap();
+    assert_eq!(Client::new(router).get("/api/me").await.status, 403);
+}
+
+/// A custom auth reading a header, with per-model rules.
+struct HeaderAuth;
+
+#[async_trait]
+impl AdminAuth for HeaderAuth {
+    async fn authenticate(&self, _ctx: &AppContext, parts: &Parts) -> Result<AdminUser, AuthError> {
+        match parts.headers.get("x-role").and_then(|v| v.to_str().ok()) {
+            Some("editor") => Ok(AdminUser::new("1", "Editor").with_policy(
+                |access: &Access<'_>| {
+                    access.model == "posts" && access.operation != Operation::Delete
+                },
+            )),
+            Some("broken") => Err(AuthError::Internal("auth backend down".into())),
+            Some(_) => Err(AuthError::Forbidden),
+            None => Err(AuthError::Unauthenticated),
+        }
+    }
+
+    fn login(&self) -> LoginMethod {
+        LoginMethod::Form(FormLogin {
+            endpoint: "/session".into(),
+            identifier_field: "username".into(),
+            identifier_label: "Username".into(),
+            ..FormLogin::default()
+        })
+    }
+}
+
+#[tokio::test]
+async fn custom_auth_and_policies() {
+    let (db, ctx) = setup().await;
+    let router = Admin::new(HeaderAuth)
+        .model::<users::Entity>()
+        .model::<posts::Entity>()
+        .router(&ctx)
+        .unwrap();
+    let client = Client::new(router);
+    let ann = create_user(&db.db, "ann@example.com", true).await;
+    let post = create_post(&db.db, ann.id, "p").await;
+    let editor = |method: Method, uri: String| {
+        let client = client.clone();
+        async move {
+            client
+                .send_raw(method, &uri, None, vec![("x-role", "editor")])
+                .await
+        }
+    };
+
+    let config = client.get("/api/config").await.json();
+    assert_eq!(config["login"]["endpoint"], "/session");
+    assert_eq!(config["login"]["identifier_field"], "username");
+
+    let res = client
+        .send_raw(Method::GET, "/api/me", None, vec![("x-role", "viewer")])
+        .await;
+    assert_eq!(res.status, 403);
+    let res = client
+        .send_raw(Method::GET, "/api/me", None, vec![("x-role", "broken")])
+        .await;
+    assert_eq!(res.status, 500);
+    assert_eq!(res.json()["error"], "internal server error");
+
+    let schema = editor(Method::GET, "/api/schema".into()).await.json();
+    let models = schema["models"].as_array().unwrap();
+    assert_eq!(models.len(), 1, "users are invisible to editors");
+    assert_eq!(models[0]["name"], "posts");
+    assert_eq!(models[0]["capabilities"]["delete"], false);
+    assert_eq!(models[0]["capabilities"]["update"], true);
+    assert_eq!(
+        models[0]["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["name"] == "user_id")
+            .unwrap()["relation"]["model"],
+        serde_json::Value::Null,
+        "links to invisible models are dropped"
+    );
+
+    let stats = editor(Method::GET, "/api/stats".into()).await.json();
+    assert_eq!(stats["counts"], json!({"posts": 1}));
+    let list = editor(Method::GET, "/api/models/posts/records".into())
+        .await
+        .json();
+    assert_eq!(list["labels"], json!({}), "no labels from invisible models");
+    assert_eq!(
+        editor(Method::GET, "/api/models/users/records".into())
+            .await
+            .status,
+        404
+    );
+    let res = client
+        .send_raw(
+            Method::DELETE,
+            &format!("/api/models/posts/records/{}", post.id),
+            None,
+            vec![("x-role", "editor")],
+        )
+        .await;
+    assert_eq!(res.status, 403);
+}

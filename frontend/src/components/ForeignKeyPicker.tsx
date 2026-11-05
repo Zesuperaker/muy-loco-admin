@@ -1,9 +1,17 @@
+import { Combobox, ComboboxInput, ComboboxOption, ComboboxOptions } from "@headlessui/react";
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useId, useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "../api";
 import { keyText } from "../format";
 import type { FieldMeta } from "../types";
 import { Button } from "./ui";
+
+interface Selection {
+  value: string;
+  label: string;
+}
+
+const status = "px-3 py-2 text-slate-500";
 
 /** A searchable picker for a foreign-key field. `value` is the key as text. */
 export function ForeignKeyPicker({
@@ -25,11 +33,9 @@ export function ForeignKeyPicker({
 }) {
   const relation = field.relation;
   const target = relation?.model ?? "";
-  const listId = useId();
-  const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [debounced, setDebounced] = useState("");
-  const [active, setActive] = useState(-1);
+  const [used, setUsed] = useState(false);
 
   useEffect(() => {
     const timer = setTimeout(() => setDebounced(query), 200);
@@ -39,97 +45,61 @@ export function ForeignKeyPicker({
   const results = useQuery({
     queryKey: ["lookup", target, relation?.column, debounced],
     queryFn: () => api.lookup(target, debounced, relation?.column),
-    enabled: open && Boolean(target),
+    enabled: used && Boolean(target),
   });
-
   const choices = results.data?.choices ?? [];
-  const pick = (index: number) => {
-    const choice = choices[index];
-    if (!choice) return;
-    onChange(keyText(choice.value), choice.label);
-    setOpen(false);
-  };
-  const shown = open ? query : (label ?? value);
+  const selected: Selection | null = value ? { value, label: label ?? value } : null;
+
   return (
-    <div className="relative">
-      <div className="flex gap-2">
-        <input
-          id={id}
-          role="combobox"
-          aria-expanded={open}
-          aria-controls={listId}
-          aria-autocomplete="list"
-          aria-activedescendant={open && active >= 0 ? `${listId}-${active}` : undefined}
-          className="input"
-          placeholder={value ? (label ?? value) : placeholder}
-          value={shown}
-          disabled={disabled}
-          onFocus={() => {
-            setQuery("");
-            setActive(-1);
-            setOpen(true);
-          }}
-          onChange={(event) => {
-            setQuery(event.target.value);
-            setActive(-1);
-            setOpen(true);
-          }}
-          onBlur={() => setTimeout(() => setOpen(false), 150)}
-          onKeyDown={(event) => {
-            if (event.key === "Escape") {
-              setOpen(false);
-            } else if (event.key === "ArrowDown") {
-              event.preventDefault();
-              setOpen(true);
-              setActive((i) => Math.min(i + 1, choices.length - 1));
-            } else if (event.key === "ArrowUp") {
-              event.preventDefault();
-              setActive((i) => Math.max(i - 1, 0));
-            } else if (event.key === "Enter" && open && active >= 0) {
-              event.preventDefault();
-              pick(active);
-            }
-          }}
-        />
-        {value && !disabled && field.nullable && (
-          <Button variant="ghost" onClick={() => onChange("", "")} aria-label={`Clear ${field.label}`}>
-            Clear
-          </Button>
-        )}
-      </div>
-      {open && (
-        <div
-          id={listId}
-          role="listbox"
-          className="absolute z-20 mt-1 max-h-64 w-full overflow-auto rounded-md border border-slate-200 bg-white py-1 text-sm shadow-lg dark:border-slate-700 dark:bg-slate-800"
-        >
-          {results.isPending && <div className="px-3 py-2 text-slate-500">Searching…</div>}
-          {results.error && <div className="px-3 py-2 text-rose-600">{results.error.message}</div>}
-          {results.data && choices.length === 0 && (
-            <div className="px-3 py-2 text-slate-500">No matches</div>
-          )}
-          {choices.map((choice, index) => {
-            const text = keyText(choice.value);
-            return (
-              <div
-                key={choice.key}
-                id={`${listId}-${index}`}
-                role="option"
-                tabIndex={-1}
-                aria-selected={text === value}
-                className={`cursor-pointer px-3 py-2 hover:bg-indigo-50 dark:hover:bg-slate-700 ${
-                  index === active ? "bg-indigo-50 dark:bg-slate-700" : ""
-                }`}
-                onMouseDown={(event) => {
-                  event.preventDefault();
-                  pick(index);
-                }}
-              >
-                {choice.label} <span className="text-xs text-slate-400">#{text}</span>
-              </div>
-            );
-          })}
+    <div className="flex gap-2">
+      <Combobox
+        value={selected}
+        by="value"
+        immediate
+        disabled={disabled}
+        onChange={(choice: Selection | null) => {
+          if (choice) onChange(choice.value, choice.label);
+        }}
+        onClose={() => setQuery("")}
+      >
+        <div className="relative flex-1">
+          <ComboboxInput
+            id={id}
+            className="input"
+            placeholder={placeholder}
+            displayValue={(choice: Selection | null) => choice?.label ?? ""}
+            onChange={(event) => setQuery(event.target.value)}
+            onFocus={() => setUsed(true)}
+          />
+          <ComboboxOptions className="absolute z-20 mt-1 max-h-64 w-full overflow-auto rounded-md border border-slate-200 bg-white py-1 text-sm shadow-lg empty:invisible dark:border-slate-700 dark:bg-slate-800">
+            {results.isPending && <div className={status}>Searching…</div>}
+            {results.error && (
+              <div className="px-3 py-2 text-rose-600">{results.error.message}</div>
+            )}
+            {results.data && choices.length === 0 && <div className={status}>No matches</div>}
+            {choices.map((choice) => {
+              const option = { value: keyText(choice.value), label: choice.label };
+              return (
+                <ComboboxOption
+                  key={choice.key}
+                  value={option}
+                  className="cursor-pointer px-3 py-2 data-focus:bg-indigo-50 data-selected:font-medium dark:data-focus:bg-slate-700"
+                >
+                  {choice.label} <span className="text-xs text-slate-400">#{option.value}</span>
+                </ComboboxOption>
+              );
+            })}
+          </ComboboxOptions>
         </div>
+      </Combobox>
+      {value && !disabled && field.nullable && (
+        <Button
+          variant="ghost"
+          onClick={() => onChange("", "")}
+          aria-label={`Clear ${field.label}`}
+        >
+          Clear
+        </Button>
       )}
     </div>
   );

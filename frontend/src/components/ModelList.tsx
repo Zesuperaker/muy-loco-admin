@@ -1,6 +1,6 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { type FormEvent, useState } from "react";
-import { Link, useSearchParams } from "react-router";
+import { type FormEvent, type MouseEvent, useState } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router";
 import { type ListQuery, api, listSearch } from "../api";
 import { display, keyText } from "../format";
 import { paths } from "../paths";
@@ -9,6 +9,8 @@ import { ForeignKeyPicker } from "./ForeignKeyPicker";
 import { Button, Card, ErrorBanner, Spinner, useToast } from "./ui";
 
 const NULL_FILTER = "__null__";
+/** Clicks on these keep their own behavior instead of opening the row's record. */
+const INTERACTIVE = "a, button, input, select, textarea, [data-select]";
 
 export function queryFromSearch(search: URLSearchParams): ListQuery {
   const filters: Record<string, string> = {};
@@ -107,18 +109,18 @@ function Cell({
   field,
   record,
   labels,
-  first,
+  link,
 }: {
   model: ModelMeta;
   models: ModelMeta[];
   field: FieldMeta;
   record: AdminRecord;
   labels: Labels;
-  first: boolean;
+  link: boolean;
 }) {
   const value = record.values[field.name];
   const text = display(field, value);
-  if (first) {
+  if (link) {
     return (
       <Link to={paths.record(model.name, record.key)} className="font-medium text-indigo-600 hover:underline dark:text-indigo-400">
         {text}
@@ -160,6 +162,7 @@ export function ModelList({ model, models }: { model: ModelMeta; models: ModelMe
   const query = queryFromSearch(search);
   const scope = `${model.name}?${search.toString()}`;
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const { notify } = useToast();
   const [selection, setSelection] = useState<{ scope: string; keys: Set<string> }>({
     scope,
@@ -213,6 +216,8 @@ export function ModelList({ model, models }: { model: ModelMeta; models: ModelMe
   const columns = model.list_display
     .map((name) => model.fields.find((f) => f.name === name))
     .filter((f): f is FieldMeta => Boolean(f));
+  // The record's name (or title, email...) links to it; without one, the first column does.
+  const linkField = columns.find((f) => f.name === model.display_field) ?? columns[0];
   const filters = model.list_filter
     .map((name) => model.fields.find((f) => f.name === name))
     .filter((f): f is FieldMeta => Boolean(f));
@@ -235,6 +240,12 @@ export function ModelList({ model, models }: { model: ModelMeta; models: ModelMe
   const sortBy = (name: string) => {
     const order = sortField === name && sortOrder === "asc" ? "desc" : "asc";
     update({ sort: name, order });
+  };
+  const openRow = (event: MouseEvent<HTMLTableRowElement>, key: string) => {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    if ((event.target as Element).closest(INTERACTIVE)) return;
+    if (window.getSelection()?.toString()) return;
+    navigate(paths.record(model.name, key));
   };
   const submitSearch = (event: FormEvent) => {
     event.preventDefault();
@@ -376,18 +387,24 @@ export function ModelList({ model, models }: { model: ModelMeta; models: ModelMe
                 </tr>
               )}
               {records.map((record) => (
-                <tr key={record.key} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                <tr
+                  key={record.key}
+                  className="cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/40"
+                  onClick={(event) => openRow(event, record.key)}
+                >
                   {selectable && (
-                    <td className="px-4 py-2">
-                      <input
-                        type="checkbox"
-                        aria-label={`Select ${record.label}`}
-                        checked={selected.has(record.key)}
-                        onChange={() => toggle(record.key)}
-                      />
+                    <td className="p-0" data-select>
+                      <label className="flex px-4 py-2">
+                        <input
+                          type="checkbox"
+                          aria-label={`Select ${record.label}`}
+                          checked={selected.has(record.key)}
+                          onChange={() => toggle(record.key)}
+                        />
+                      </label>
                     </td>
                   )}
-                  {columns.map((field, index) => (
+                  {columns.map((field) => (
                     <td key={field.name} className="px-4 py-2 whitespace-nowrap">
                       <Cell
                         model={model}
@@ -395,7 +412,7 @@ export function ModelList({ model, models }: { model: ModelMeta; models: ModelMe
                         field={field}
                         record={record}
                         labels={page?.labels ?? {}}
-                        first={index === 0}
+                        link={field === linkField}
                       />
                     </td>
                   ))}

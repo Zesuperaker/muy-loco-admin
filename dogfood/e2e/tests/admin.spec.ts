@@ -63,6 +63,18 @@ test("searches, filters and sorts a list", async ({ page }) => {
   await expect(page.locator("tbody tr").first()).toContainText("100% uptime is a myth");
 });
 
+test("opens a record from its row, linking its name", async ({ page }) => {
+  await signedIn(page, "/admin/models/categories");
+  const header = page.locator("thead th");
+  await expect(header.nth(1)).toHaveText(/^Id/);
+  await expect(header.last()).toHaveText("Updated at");
+  const row = page.locator("tbody tr", { hasText: "product" });
+  await expect(row.getByRole("link")).toHaveText("Product");
+  await row.getByRole("cell", { name: "product", exact: true }).click();
+  await expect(page).toHaveURL(/\/admin\/models\/categories\/records\/2$/);
+  await expect(page.getByRole("heading", { name: "Product" })).toBeVisible();
+});
+
 test("follows foreign keys and related lists", async ({ page }) => {
   await signedIn(page, "/admin/models/articles/records/3");
   await expect(page.getByLabel("User")).toHaveValue("user2@example.com");
@@ -135,7 +147,7 @@ test("exports CSV", async ({ page }) => {
   const file = await download;
   expect(file.suggestedFilename()).toBe("categories.csv");
   const text = await readFile(await file.path(), "utf8");
-  expect(text.split("\n")[0]).toBe("created_at,updated_at,id,name,slug,description");
+  expect(text.split("\n")[0]).toBe("id,name,slug,description,created_at,updated_at");
   expect(text).toContain("engineering");
 });
 

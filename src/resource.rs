@@ -38,7 +38,8 @@ use crate::{
 const DEFAULT_PER_PAGE: u64 = 25;
 const EXPORT_BATCH: u64 = 500;
 const SENSITIVE: &[&str] = &["password", "secret", "token", "api_key", "salt"];
-const DEFAULT_READONLY: &[&str] = &["created_at", "updated_at"];
+/// Loco's timestamp columns: read-only by default and listed after the other fields.
+const TIMESTAMPS: &[&str] = &["created_at", "updated_at"];
 const DISPLAY_CANDIDATES: &[&str] = &[
     "name", "title", "label", "email", "username", "slug", "code",
 ];
@@ -240,7 +241,25 @@ where
     pub(crate) fn new(config: ModelAdmin<E>) -> Result<Self, String> {
         let table = E::default().table_name().to_string();
         let name = config.name.clone().unwrap_or_else(|| table.clone());
-        let all: Vec<E::Column> = E::Column::iter().collect();
+        let pk: Vec<E::Column> = E::PrimaryKey::iter()
+            .map(PrimaryKeyToColumn::into_column)
+            .collect();
+        let pk_names: Vec<String> = pk.iter().map(|c| c.as_str().to_string()).collect();
+        let auto_increment = <E::PrimaryKey as PrimaryKeyTrait>::auto_increment();
+
+        // Primary key first and timestamps last, so the list and form open on the
+        // columns that identify and describe a record rather than on `created_at`.
+        let mut all: Vec<E::Column> = E::Column::iter().collect();
+        all.sort_by_key(|c| {
+            let name = c.as_str();
+            if pk_names.iter().any(|k| k == name) {
+                0
+            } else if TIMESTAMPS.contains(&name) {
+                2
+            } else {
+                1
+            }
+        });
         let all_names: Vec<String> = all.iter().map(|c| c.as_str().to_string()).collect();
         let check = |what: &str, list: &[String]| -> Result<(), String> {
             for field in list {
@@ -250,12 +269,6 @@ where
             }
             Ok(())
         };
-
-        let pk: Vec<E::Column> = E::PrimaryKey::iter()
-            .map(PrimaryKeyToColumn::into_column)
-            .collect();
-        let pk_names: Vec<String> = pk.iter().map(|c| c.as_str().to_string()).collect();
-        let auto_increment = <E::PrimaryKey as PrimaryKeyTrait>::auto_increment();
 
         let hidden: HashSet<String> = match &config.hidden_fields {
             Some(list) => {
@@ -281,7 +294,7 @@ where
                 check("readonly_fields", list)?;
                 list.iter().cloned().collect()
             }
-            None => DEFAULT_READONLY.iter().map(ToString::to_string).collect(),
+            None => TIMESTAMPS.iter().map(ToString::to_string).collect(),
         };
 
         let foreign_keys: BTreeMap<String, (String, String)> = E::Relation::iter()

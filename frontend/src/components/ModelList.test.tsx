@@ -1,7 +1,15 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { baseRoutes, currentLocation, mockFetch, postRecord, renderApp } from "../test/utils";
+import {
+  baseRoutes,
+  currentLocation,
+  mockFetch,
+  postRecord,
+  postsModel,
+  renderApp,
+  usersModel,
+} from "../test/utils";
 import { queryFromSearch } from "./ModelList";
 
 function page(records = [postRecord(2), postRecord(1, { featured: true, rating: 4.5 })], extra = {}) {
@@ -40,10 +48,11 @@ describe("ModelList", () => {
     expect(screen.getByText("2 total")).toBeInTheDocument();
     const rows = within(table).getAllByRole("row");
     expect(rows).toHaveLength(3);
-    expect(within(rows[1]!).getByRole("link", { name: "2" })).toHaveAttribute(
+    expect(within(rows[1]!).getByRole("link", { name: "Post 2" })).toHaveAttribute(
       "href",
       "/admin/models/posts/records/2",
     );
+    expect(within(rows[1]!).queryByRole("link", { name: "2" })).not.toBeInTheDocument();
     expect(within(rows[1]!).getAllByRole("link", { name: "Ann" })[0]).toHaveAttribute(
       "href",
       "/admin/models/users/records/1",
@@ -53,6 +62,52 @@ describe("ModelList", () => {
     expect(within(rows[1]!).getAllByText("—").length).toBeGreaterThan(0);
     expect(screen.getByRole("columnheader", { name: /Id/ })).toHaveAttribute("aria-sort", "descending");
     expect(document.title).toBe("Posts · Test Admin");
+  });
+
+  it("opens a record from anywhere on its row", async () => {
+    mockFetch(
+      baseRoutes({
+        "GET /admin/api/models/posts/records": { body: page() },
+        "GET /admin/api/models/posts/records/2": { body: { record: postRecord(2), labels: {} } },
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp("/admin/models/posts");
+    const row = within(await screen.findByRole("table")).getAllByRole("row")[1]!;
+    const id = within(row).getByText("2");
+
+    await user.click(within(row).getByLabelText("Select Post 2"));
+    fireEvent.click(row.querySelector("[data-select]")!);
+    fireEvent.click(id, { ctrlKey: true });
+    fireEvent.click(id, { button: 1 });
+    const selection = vi.spyOn(window, "getSelection").mockReturnValue({
+      toString: () => "Post",
+    } as Selection);
+    fireEvent.click(id);
+    selection.mockRestore();
+    expect(currentLocation()).toBe("/models/posts");
+    expect(screen.getByText("1 selected")).toBeInTheDocument();
+
+    await user.click(id);
+    expect(currentLocation()).toBe("/models/posts/records/2");
+  });
+
+  it("links the first column when the display field is not listed", async () => {
+    mockFetch(
+      baseRoutes({
+        "GET /admin/api/schema": {
+          body: { models: [usersModel, { ...postsModel, display_field: null }] },
+        },
+        "GET /admin/api/models/posts/records": { body: page() },
+      }),
+    );
+    renderApp("/admin/models/posts");
+    const row = within(await screen.findByRole("table")).getAllByRole("row")[1]!;
+    expect(within(row).getByRole("link", { name: "2" })).toHaveAttribute(
+      "href",
+      "/admin/models/posts/records/2",
+    );
+    expect(within(row).queryByRole("link", { name: "Post 2" })).not.toBeInTheDocument();
   });
 
   it("updates the URL when sorting, searching, filtering and paging", async () => {

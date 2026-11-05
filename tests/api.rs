@@ -195,6 +195,33 @@ async fn schema_describes_models() {
 }
 
 #[tokio::test]
+async fn fields_put_the_key_first_and_timestamps_last() {
+    let (_db, _ctx, client) = client().await;
+    let schema = client.get("/api/schema").await.json();
+    let users = model(&schema, "users");
+    let names: Vec<&str> = users["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["name"].as_str().unwrap())
+        .collect();
+    // The test entity declares its timestamps first, as Loco's generated entities do.
+    assert_eq!(
+        names,
+        [
+            "id",
+            "pid",
+            "email",
+            "name",
+            "is_admin",
+            "created_at",
+            "updated_at"
+        ]
+    );
+    assert_eq!(users["list_display"], json!(names));
+}
+
+#[tokio::test]
 async fn create_show_and_typed_values() {
     let (db, _ctx, client) = client().await;
     let user = create_user(&db.db, "ann@example.com", true).await;

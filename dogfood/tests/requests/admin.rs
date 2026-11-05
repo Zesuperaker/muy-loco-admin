@@ -224,7 +224,15 @@ async fn runs_actions_and_exports() {
             .await;
         assert_eq!(csv.status_code(), 200);
         let text = csv.text();
-        assert!(text.starts_with("created_at,updated_at,id,title,"));
+        assert!(
+            text.starts_with("id,title,")
+                && text
+                    .lines()
+                    .next()
+                    .unwrap()
+                    .ends_with(",created_at,updated_at"),
+            "key first, timestamps last: {text}"
+        );
         assert_eq!(text.lines().count(), 1 + 2);
 
         let tag = request

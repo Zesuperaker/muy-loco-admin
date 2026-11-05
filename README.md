@@ -81,7 +81,7 @@ app does not use Loco's JWT auth, implement `AdminAuth` (see [Authentication](#a
 
 ## Features
 
-- List with pagination, sorting, search and filters
+- List with pagination, sorting, search and filters; click a row to open its record
 - Create, edit and delete; bulk delete and custom bulk actions
 - Writes go through `ActiveModel`, so model hooks and validation run
 - Foreign keys as links and searchable pickers; links to related records
@@ -96,14 +96,14 @@ app does not use Loco's JWT auth, implement `AdminAuth` (see [Authentication](#a
 | --- | --- |
 | `name` | table name |
 | `label` | humanized table name |
-| `list_display` | all columns except text, JSON and binary |
+| `list_display` | all columns except text, JSON and binary; key first, timestamps last |
 | `search_fields` | text columns |
 | `list_filter` | boolean, enum and foreign-key columns |
 | `readonly_fields` | `created_at`, `updated_at` (auto-increment keys are always read-only) |
 | `hidden_fields` | columns containing `password`, `secret`, `token`, `api_key` or `salt` |
 | `ordering` | primary key, descending |
 | `per_page` | 25 (max 500) |
-| `display_field` | first of `name`, `title`, `label`, `email`, `username`, `slug`, `code` |
+| `display_field` | first of `name`, `title`, `label`, `email`, `username`, `slug`, `code`; linked in the list |
 | `can_create`, `can_update`, `can_delete`, `can_export`, `read_only` | everything allowed |
 | `action(name, label, handler)` | none |
 

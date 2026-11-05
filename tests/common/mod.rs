@@ -30,6 +30,9 @@ pub mod users {
     #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
     #[sea_orm(table_name = "users")]
     pub struct Model {
+        // Timestamps first, as in the entities Loco generates.
+        pub created_at: DateTimeWithTimeZone,
+        pub updated_at: DateTimeWithTimeZone,
         #[sea_orm(primary_key)]
         pub id: i32,
         pub pid: Uuid,
@@ -39,8 +42,6 @@ pub mod users {
         pub password: String,
         pub api_key: String,
         pub is_admin: bool,
-        pub created_at: DateTimeWithTimeZone,
-        pub updated_at: DateTimeWithTimeZone,
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

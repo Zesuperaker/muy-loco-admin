@@ -103,7 +103,8 @@ app does not use Loco's JWT auth, implement `AdminAuth` (see [Authentication](#a
 | `search_fields` | text columns |
 | `list_filter` | boolean, enum and foreign-key columns |
 | `readonly_fields` | `created_at`, `updated_at` (auto-increment keys are always read-only) |
-| `hidden_fields` | columns containing `password`, `secret`, `token`, `api_key` or `salt` |
+| `hidden_fields` | none; columns containing `password`, `secret`, `token`, `api_key` or `salt` are always hidden too |
+| `show_fields` | none; shows such a column anyway (e.g. `prompt_tokens`) |
 | `ordering` | primary key, descending |
 | `per_page` | 25 (max 500) |
 | `display_field` | first of `name`, `title`, `label`, `email`, `username`, `slug`, `code`; linked in the list |

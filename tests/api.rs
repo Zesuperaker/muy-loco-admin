@@ -932,6 +932,26 @@ async fn invalid_model_configuration_fails_at_mount() {
             "unknown field `x` in hidden_fields",
         ),
         (
+            Admin::new(AllowAll).register(ModelAdmin::<users::Entity>::new().show_fields(["x"])),
+            "unknown field `x` in show_fields",
+        ),
+        (
+            Admin::new(AllowAll).register(
+                ModelAdmin::<users::Entity>::new()
+                    .hidden_fields(["email"])
+                    .show_fields(["email"]),
+            ),
+            "field `email` is in both hidden_fields and show_fields",
+        ),
+        (
+            Admin::new(AllowAll).register(
+                ModelAdmin::<users::Entity>::new()
+                    .hidden_fields(["name"])
+                    .list_display(["password"]),
+            ),
+            "hidden field `password` used in list_display",
+        ),
+        (
             Admin::new(AllowAll)
                 .register(ModelAdmin::<users::Entity>::new().readonly_fields(["x"])),
             "unknown field `x` in readonly_fields",
@@ -982,7 +1002,8 @@ async fn custom_configuration_is_applied() {
         .register(
             ModelAdmin::<users::Entity>::new()
                 .name("people")
-                .hidden_fields(["password"])
+                .hidden_fields(["pid"])
+                .show_fields(["api_key"])
                 .readonly_fields(["email"])
                 .list_display(["email", "api_key"])
                 .search_fields(["api_key", "id"])
@@ -999,7 +1020,12 @@ async fn custom_configuration_is_applied() {
     let schema = client.get("/api/schema").await.json();
     let people = model(&schema, "people");
     assert_eq!(people["table"], "users");
-    assert!(field(people, "api_key").is_some());
+    assert!(field(people, "api_key").is_some(), "shown on request");
+    assert!(field(people, "pid").is_none(), "hidden on request");
+    assert!(
+        field(people, "password").is_none(),
+        "still hidden by default"
+    );
     assert_eq!(field(people, "email").unwrap()["readonly"], true);
     assert_eq!(people["list_display"], json!(["email", "api_key"]));
     assert_eq!(people["list_filter"], json!(["is_admin"]));

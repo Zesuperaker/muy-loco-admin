@@ -158,6 +158,12 @@ fn single_column(identity: &sea_orm::Identity) -> Option<String> {
     }
 }
 
+/// Whether a column name looks like it holds a credential.
+fn is_sensitive(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    SENSITIVE.iter().any(|s| lower.contains(s))
+}
+
 fn escape_like(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     for c in input.chars() {
@@ -270,23 +276,33 @@ where
             Ok(())
         };
 
-        let hidden: HashSet<String> = match &config.hidden_fields {
-            Some(list) => {
-                check("hidden_fields", list)?;
-                list.iter().cloned().collect()
-            }
-            None => all_names
-                .iter()
-                .filter(|n| {
-                    let lower = n.to_ascii_lowercase();
-                    SENSITIVE.iter().any(|s| lower.contains(s))
-                })
-                .cloned()
-                .collect(),
-        };
-        if let Some(key) = pk_names.iter().find(|k| hidden.contains(*k)) {
+        // Sensitive-looking columns stay hidden whatever `hidden_fields` lists;
+        // only `show_fields` reveals one.
+        check("hidden_fields", &config.hidden_fields)?;
+        check("show_fields", &config.show_fields)?;
+        if let Some(field) = config
+            .hidden_fields
+            .iter()
+            .find(|f| config.show_fields.contains(*f))
+        {
             return Err(format!(
-                "model `{name}`: primary key `{key}` cannot be hidden"
+                "model `{name}`: field `{field}` is in both hidden_fields and show_fields"
+            ));
+        }
+        let hidden: HashSet<String> = all_names
+            .iter()
+            .filter(|n| is_sensitive(n) && !config.show_fields.contains(*n))
+            .chain(&config.hidden_fields)
+            .cloned()
+            .collect();
+        if let Some(key) = pk_names.iter().find(|k| hidden.contains(*k)) {
+            let hint = if config.hidden_fields.contains(key) {
+                ""
+            } else {
+                " (its name looks sensitive; list it in show_fields to show it)"
+            };
+            return Err(format!(
+                "model `{name}`: primary key `{key}` cannot be hidden{hint}"
             ));
         }
         let readonly: HashSet<String> = match &config.readonly_fields {

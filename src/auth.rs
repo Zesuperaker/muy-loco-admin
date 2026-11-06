@@ -1,10 +1,9 @@
-//! Authentication and authorization hooks.
+//! Authentication hooks.
 //!
 //! Every admin API request is authenticated through an [`AdminAuth`]
-//! implementation. The returned [`AdminUser`] then decides, per model and
-//! operation, what the user may do.
-
-use std::{fmt, sync::Arc};
+//! implementation. A user it lets in may use the whole admin: what can be
+//! done to each model is set per model with
+//! [`ModelAdmin`](crate::ModelAdmin), the same for every admin user.
 
 use async_trait::async_trait;
 use axum::http::request::Parts;
@@ -13,75 +12,22 @@ use serde::Serialize;
 
 use crate::error::AdminError;
 
-/// An operation on a model.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Operation<'a> {
-    /// List, view and look up records.
-    View,
-    Create,
-    Update,
-    Delete,
-    /// Download records as CSV.
-    Export,
-    /// Run the named custom action.
-    Action(&'a str),
-}
-
-/// An authorization request: may the user perform `operation` on `model`?
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Access<'a> {
-    /// The admin model name (the table name unless overridden).
-    pub model: &'a str,
-    pub operation: Operation<'a>,
-}
-
-type Policy = Arc<dyn Fn(&Access<'_>) -> bool + Send + Sync>;
-
 /// An authenticated admin user.
-#[derive(Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AdminUser {
     /// A stable identifier (for example the user's `pid`).
     pub id: String,
     /// The name shown in the UI.
     pub name: String,
-    policy: Option<Policy>,
 }
 
 impl AdminUser {
-    /// A user allowed to perform every operation.
     #[must_use]
     pub fn new(id: impl Into<String>, name: impl Into<String>) -> Self {
         Self {
             id: id.into(),
             name: name.into(),
-            policy: None,
         }
-    }
-
-    /// Restrict the user to operations for which `policy` returns `true`.
-    #[must_use]
-    pub fn with_policy(
-        mut self,
-        policy: impl Fn(&Access<'_>) -> bool + Send + Sync + 'static,
-    ) -> Self {
-        self.policy = Some(Arc::new(policy));
-        self
-    }
-
-    /// Whether the user may perform `access`.
-    #[must_use]
-    pub fn can(&self, access: &Access<'_>) -> bool {
-        self.policy.as_ref().is_none_or(|policy| policy(access))
-    }
-}
-
-impl fmt::Debug for AdminUser {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("AdminUser")
-            .field("id", &self.id)
-            .field("name", &self.name)
-            .field("policy", &self.policy.is_some())
-            .finish()
     }
 }
 
@@ -153,8 +99,8 @@ pub enum LoginMethod {
 
 /// Authenticates admin requests.
 ///
-/// Implement this to plug in any authentication scheme. The returned
-/// [`AdminUser`] carries the per-operation policy.
+/// Implement this to plug in any authentication scheme. Return an
+/// [`AdminUser`] only for users who may use the whole admin.
 #[async_trait]
 pub trait AdminAuth: Send + Sync + 'static {
     /// Authenticate the request described by `parts`.
@@ -203,12 +149,11 @@ mod jwt {
         model::{Authenticable, ModelError},
     };
 
-    use super::{Access, AdminAuth, AdminUser, AuthError, FormLogin, LoginMethod};
+    use super::{AdminAuth, AdminUser, AuthError, FormLogin, LoginMethod};
     use crate::session;
 
     type Check<U> = Arc<dyn Fn(&U) -> bool + Send + Sync>;
     type Name<U> = Arc<dyn Fn(&U) -> String + Send + Sync>;
-    type Permissions<U> = Arc<dyn Fn(&U, &Access<'_>) -> bool + Send + Sync>;
 
     /// Authenticates with Loco's JWT auth (`auth.jwt` in the config).
     ///
@@ -224,12 +169,10 @@ mod jwt {
     /// JwtAuth::<users::Model>::new(|user| user.is_admin)
     ///     .login_endpoint("/api/auth/login")
     ///     .display_name(|user| user.email.clone())
-    ///     .permissions(|user, access| user.is_superuser || access.operation == Operation::View)
     /// ```
     pub struct JwtAuth<U> {
         allow: Check<U>,
         name: Option<Name<U>>,
-        permissions: Option<Permissions<U>>,
         login: LoginMethod,
     }
 
@@ -237,13 +180,13 @@ mod jwt {
     where
         U: Authenticable + Send + Sync + 'static,
     {
-        /// Only users for which `allow` returns `true` can use the admin.
+        /// Only users for which `allow` returns `true` can use the admin, and
+        /// they can use all of it.
         #[must_use]
         pub fn new(allow: impl Fn(&U) -> bool + Send + Sync + 'static) -> Self {
             Self {
                 allow: Arc::new(allow),
                 name: None,
-                permissions: None,
                 login: LoginMethod::Form(FormLogin::default()),
             }
         }
@@ -252,17 +195,6 @@ mod jwt {
         #[must_use]
         pub fn display_name(mut self, name: impl Fn(&U) -> String + Send + Sync + 'static) -> Self {
             self.name = Some(Arc::new(name));
-            self
-        }
-
-        /// Restrict what each user may do. Without this, allowed users may do
-        /// everything.
-        #[must_use]
-        pub fn permissions(
-            mut self,
-            permissions: impl Fn(&U, &Access<'_>) -> bool + Send + Sync + 'static,
-        ) -> Self {
-            self.permissions = Some(Arc::new(permissions));
             self
         }
 
@@ -330,15 +262,7 @@ mod jwt {
                 .name
                 .as_ref()
                 .map_or_else(|| pid.clone(), |name| name(&user));
-            let admin = AdminUser::new(pid, name);
-            Ok(match &self.permissions {
-                Some(permissions) => {
-                    let permissions = Arc::clone(permissions);
-                    let user = Arc::new(user);
-                    admin.with_policy(move |access| permissions(&user, access))
-                }
-                None => admin,
-            })
+            Ok(AdminUser::new(pid, name))
         }
 
         fn login(&self) -> LoginMethod {
@@ -350,37 +274,6 @@ mod jwt {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn users_without_policy_can_do_everything() {
-        let user = AdminUser::new("1", "Ann");
-        assert!(user.can(&Access {
-            model: "posts",
-            operation: Operation::Delete
-        }));
-        assert_eq!(
-            format!("{user:?}"),
-            r#"AdminUser { id: "1", name: "Ann", policy: false }"#
-        );
-    }
-
-    #[test]
-    fn policies_restrict_operations() {
-        let user = AdminUser::new("1", "Ann")
-            .with_policy(|a| a.operation == Operation::View || a.model == "notes");
-        assert!(user.can(&Access {
-            model: "posts",
-            operation: Operation::View
-        }));
-        assert!(!user.can(&Access {
-            model: "posts",
-            operation: Operation::Action("publish")
-        }));
-        assert!(user.can(&Access {
-            model: "notes",
-            operation: Operation::Delete
-        }));
-    }
 
     #[test]
     fn auth_errors_map_to_admin_errors() {

@@ -32,9 +32,7 @@ mod value;
 
 pub use admin::{Admin, CONFIG_KEY};
 pub use api::{CSRF_HEADER, CSRF_VALUE};
-pub use auth::{
-    Access, AdminAuth, AdminUser, AllowAll, AuthError, FormLogin, LoginMethod, Operation,
-};
+pub use auth::{AdminAuth, AdminUser, AllowAll, AuthError, FormLogin, LoginMethod};
 pub use error::{AdminError, FieldErrors};
 pub use meta::{FieldKind, SortDirection};
 pub use model::{ActionResult, ModelAdmin};

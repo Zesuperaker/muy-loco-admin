@@ -211,7 +211,10 @@ impl<E: EntityTrait> ModelAdmin<E> {
     }
 
     /// Add a bulk action run on the selected records. The returned message
-    /// is shown to the user; an error is shown as a failure.
+    /// is shown to the user. To fail with a message of your own, return
+    /// `Error::BadRequest(message)`; database errors are reported as for the
+    /// admin's own writes, and any other error is logged and reported as an
+    /// internal error, without its details.
     #[must_use]
     pub fn action<F, Fut>(
         mut self,

@@ -136,7 +136,6 @@ struct Column<E: EntityTrait> {
 pub(crate) struct ModelResource<E: EntityTrait> {
     meta: ModelMeta,
     columns: Vec<Column<E>>,
-    hidden: HashSet<String>,
     pk: Vec<E::Column>,
     search: Vec<usize>,
     display: Option<E::Column>,
@@ -492,7 +491,6 @@ where
         Ok(Self {
             meta,
             columns,
-            hidden,
             pk,
             search,
             display,
@@ -625,13 +623,13 @@ where
         let mut errors = FieldErrors::new();
         let mut changed = false;
         for (name, value) in input {
+            // Hidden columns get the same answer as missing ones, so the reply
+            // does not reveal that they exist.
             let Some(column) = self.columns.iter().find(|c| c.name == name) else {
-                let msg = if self.hidden.contains(&name) {
-                    "is not editable"
-                } else {
-                    "is not a field of this model"
-                };
-                errors.entry(name).or_default().push(msg.to_string());
+                errors
+                    .entry(name)
+                    .or_default()
+                    .push("is not a field of this model".to_string());
                 continue;
             };
             if column.readonly || (current.is_some() && column.primary_key) {
@@ -648,7 +646,13 @@ where
                     }
                     match am.try_set(column.col, value) {
                         Ok(()) => changed = true,
-                        Err(err) => errors.entry(name).or_default().push(err.to_string()),
+                        Err(err) => {
+                            tracing::info!(field = %name, error = %err, "admin field rejected");
+                            errors
+                                .entry(name)
+                                .or_default()
+                                .push("has an invalid value".to_string());
+                        }
                     }
                 }
                 Err(msg) => errors.entry(name).or_default().push(msg),
@@ -878,10 +882,23 @@ where
         }
         (action.handler)(ctx.clone(), models)
             .await
-            .map_err(|err| AdminError::Validation {
-                message: err.to_string(),
-                fields: FieldErrors::new(),
-            })
+            .map_err(|err| action_error(name, err))
+    }
+}
+
+/// What the client learns of a failed action, following Loco's own rule for
+/// controllers: a `BadRequest` message is meant for the user, other errors are
+/// logged and reported as internal. Database errors read as they do for the
+/// admin's own writes, so hook and validation messages still show.
+fn action_error(action: &str, err: loco_rs::Error) -> AdminError {
+    match err {
+        loco_rs::Error::BadRequest(message) => AdminError::Validation {
+            message,
+            fields: FieldErrors::new(),
+        },
+        loco_rs::Error::WithBacktrace { inner, .. } => action_error(action, *inner),
+        loco_rs::Error::DB(err) => AdminError::from(err),
+        other => AdminError::Internal(format!("action `{action}` failed: {other}")),
     }
 }
 

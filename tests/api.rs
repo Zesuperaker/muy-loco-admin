@@ -25,7 +25,22 @@ fn admin() -> Admin {
                     Ok(format!("published {n} posts"))
                 })
                 .action("fail", "Always fails", |_, _| async {
-                    Err(loco_rs::Error::string("the action failed"))
+                    Err(loco_rs::Error::string("db password is hunter2"))
+                })
+                .action("refuse", "Refuses", |_, _| async {
+                    // A backtrace does not hide a message meant for the user.
+                    Err(loco_rs::Error::WithBacktrace {
+                        inner: Box::new(loco_rs::Error::BadRequest("nothing to do".into())),
+                        backtrace: Box::new(std::backtrace::Backtrace::disabled()),
+                    })
+                })
+                .action("retitle", "Retitle", |ctx: AppContext, posts| async move {
+                    for post in posts {
+                        let mut am: posts::ActiveModel = post.into_active_model();
+                        am.title = Set("hook-error".into());
+                        am.update(&ctx.db).await?;
+                    }
+                    Ok(String::new())
                 }),
         )
         .model::<post_tags::Entity>()
@@ -170,7 +185,12 @@ async fn schema_describes_models() {
     );
     assert_eq!(
         posts["actions"],
-        json!([{"name": "publish", "label": "Publish"}, {"name": "fail", "label": "Always fails"}])
+        json!([
+            {"name": "publish", "label": "Publish"},
+            {"name": "fail", "label": "Always fails"},
+            {"name": "refuse", "label": "Refuses"},
+            {"name": "retitle", "label": "Retitle"},
+        ])
     );
     assert_eq!(
         posts["related"],
@@ -292,7 +312,8 @@ async fn create_reports_field_errors() {
     assert_eq!(res.status, 422);
     assert_eq!(
         res.json()["fields"]["secret_token"],
-        json!(["is not editable"])
+        json!(["is not a field of this model"]),
+        "hidden fields are not revealed"
     );
 
     assert_eq!(count::<posts::Entity>(&db.db).await, 0);
@@ -321,6 +342,7 @@ async fn create_surfaces_hook_and_database_errors() {
     input.as_object_mut().unwrap().remove("body");
     let res = client.post("/api/models/posts/records", input).await;
     assert_eq!(res.status, 422, "missing NOT NULL column: {}", res.text());
+    assert_eq!(res.json()["error"], "the database rejected these values");
 
     let res = client
         .send_raw(
@@ -354,6 +376,11 @@ async fn unique_violations_are_conflicts() {
         )
         .await;
     assert_eq!(res.status, 409, "{}", res.text());
+    assert_eq!(
+        res.json(),
+        json!({"error": "a record with the same value already exists"}),
+        "no table or column names"
+    );
 }
 
 #[tokio::test]
@@ -762,8 +789,21 @@ async fn actions_run_on_selected_records() {
             json!({"keys": [a.id.to_string()]}),
         )
         .await;
+    assert_eq!(res.status, 500);
+    assert_eq!(res.json()["error"], "internal server error");
+    assert!(!res.text().contains("hunter2"));
+
+    let refuse = json!({"keys": [a.id.to_string()]});
+    let res = client
+        .post("/api/models/posts/actions/refuse", refuse.clone())
+        .await;
     assert_eq!(res.status, 422);
-    assert_eq!(res.json()["error"], "the action failed");
+    assert_eq!(res.json()["error"], "nothing to do");
+    let res = client
+        .post("/api/models/posts/actions/retitle", refuse)
+        .await;
+    assert_eq!(res.status, 422);
+    assert_eq!(res.json()["error"], "rejected by hook");
 
     let res = client
         .post("/api/models/posts/actions/unknown", json!({"keys": ["1"]}))

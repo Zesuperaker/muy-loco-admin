@@ -134,18 +134,34 @@ fn is_constraint_message(msg: &str) -> bool {
     .any(|needle| lower.contains(needle))
 }
 
+/// `message` for the client; the database's own wording, which names tables,
+/// columns and constraints, goes to the log only.
+fn rejected(err: &DbErr, message: &str) -> String {
+    tracing::info!(error = %err, "admin request rejected by the database");
+    message.to_string()
+}
+
 impl From<DbErr> for AdminError {
     fn from(err: DbErr) -> Self {
         match err.sql_err() {
-            Some(SqlErr::UniqueConstraintViolation(msg)) => {
-                return Self::Conflict(format!("unique constraint violated: {msg}"));
+            Some(SqlErr::UniqueConstraintViolation(_)) => {
+                return Self::Conflict(rejected(
+                    &err,
+                    "a record with the same value already exists",
+                ));
             }
-            Some(SqlErr::ForeignKeyConstraintViolation(msg)) => {
-                return Self::Conflict(format!("foreign key constraint violated: {msg}"));
+            Some(SqlErr::ForeignKeyConstraintViolation(_)) => {
+                return Self::Conflict(rejected(
+                    &err,
+                    "the change would break a link to another record",
+                ));
             }
             _ => {}
         }
         match err {
+            // SeaORM never builds `Custom` errors: they carry Loco's validation
+            // errors and the messages app hooks reject a write with, both
+            // written for the user.
             DbErr::Custom(raw) => match parse_loco_validation(&raw) {
                 Some(fields) => Self::Validation {
                     message: "validation failed".to_string(),
@@ -157,12 +173,14 @@ impl From<DbErr> for AdminError {
                 },
             },
             DbErr::RecordNotFound(_) | DbErr::RecordNotUpdated => Self::NotFound,
-            DbErr::Json(msg) | DbErr::Type(msg) => Self::BadRequest(msg),
+            DbErr::Json(_) | DbErr::Type(_) => {
+                Self::BadRequest(rejected(&err, "a value has the wrong type"))
+            }
             other => {
                 let msg = other.to_string();
                 if is_constraint_message(&msg) {
                     Self::Validation {
-                        message: msg,
+                        message: rejected(&other, "the database rejected these values"),
                         fields: FieldErrors::new(),
                     }
                 } else {
@@ -245,20 +263,22 @@ mod tests {
             AdminError::from(DbErr::RecordNotUpdated),
             AdminError::NotFound
         ));
-        assert!(matches!(
-            AdminError::from(DbErr::Json("bad".into())),
-            AdminError::BadRequest(_)
-        ));
-        assert!(matches!(
-            AdminError::from(DbErr::Type("bad".into())),
-            AdminError::BadRequest(_)
-        ));
+        for err in [
+            DbErr::Json("bad secret_col".into()),
+            DbErr::Type("bad secret_col".into()),
+        ] {
+            let err = AdminError::from(err);
+            assert!(matches!(err, AdminError::BadRequest(_)));
+            assert_eq!(err.message(), "a value has the wrong type");
+        }
         let not_null = DbErr::Exec(RuntimeErr::Internal(
-            "NOT NULL constraint failed: posts.title".into(),
+            "NOT NULL constraint failed: posts.secret_col".into(),
         ));
+        let err = AdminError::from(not_null);
         assert!(matches!(
-            AdminError::from(not_null),
-            AdminError::Validation { .. }
+            err,
+            AdminError::Validation { ref message, ref fields }
+                if message == "the database rejected these values" && fields.is_empty()
         ));
         let other = DbErr::Conn(RuntimeErr::Internal("connection refused".into()));
         assert!(matches!(AdminError::from(other), AdminError::Internal(_)));

@@ -1,0 +1,169 @@
+---
+- id: 1
+  created_at: "2026-10-01T08:00:00Z"
+  updated_at: "2026-10-01T08:00:00Z"
+  title: "Getting started with Loco"
+  body: "Getting started with Loco. This article is seed data for the dogfood app."
+  status: Published
+  featured: true
+  views: 1520
+  rating: 4.8
+  published_at: "2026-10-01T09:00:00Z"
+  price: "19.99"
+  metadata: {"reading_minutes": 4}
+  user_id: 1
+  category_id: 1
+- id: 2
+  created_at: "2026-10-02T08:00:00Z"
+  updated_at: "2026-10-02T08:00:00Z"
+  title: "Designing admin dashboards"
+  body: "Designing admin dashboards. This article is seed data for the dogfood app."
+  status: Published
+  featured: true
+  views: 980
+  rating: 4.5
+  published_at: "2026-10-02T09:00:00Z"
+  price: "0.00"
+  metadata: {"reading_minutes": 5}
+  user_id: 1
+  category_id: 2
+- id: 3
+  created_at: "2026-10-03T08:00:00Z"
+  updated_at: "2026-10-03T08:00:00Z"
+  title: "SeaORM entity metadata"
+  body: "SeaORM entity metadata. This article is seed data for the dogfood app."
+  status: Review
+  featured: false
+  views: 120
+  rating: null
+  published_at: null
+  price: "9.50"
+  metadata: null
+  user_id: 2
+  category_id: 1
+- id: 4
+  created_at: "2026-10-04T08:00:00Z"
+  updated_at: "2026-10-04T08:00:00Z"
+  title: "Shipping weekly releases"
+  body: "Shipping weekly releases. This article is seed data for the dogfood app."
+  status: Draft
+  featured: false
+  views: 0
+  rating: null
+  published_at: null
+  price: "0.00"
+  metadata: {"reading_minutes": 7}
+  user_id: 2
+  category_id: 2
+- id: 5
+  created_at: "2026-10-05T08:00:00Z"
+  updated_at: "2026-10-05T08:00:00Z"
+  title: "Postgres enums in practice"
+  body: "Postgres enums in practice. This article is seed data for the dogfood app."
+  status: Published
+  featured: false
+  views: 640
+  rating: 3.9
+  published_at: "2026-10-05T09:00:00Z"
+  price: "4.99"
+  metadata: {"reading_minutes": 8}
+  user_id: 1
+  category_id: 1
+- id: 6
+  created_at: "2026-10-06T08:00:00Z"
+  updated_at: "2026-10-06T08:00:00Z"
+  title: "Remote team rituals"
+  body: "Remote team rituals. This article is seed data for the dogfood app."
+  status: Draft
+  featured: false
+  views: 15
+  rating: null
+  published_at: null
+  price: "0.00"
+  metadata: null
+  user_id: 2
+  category_id: 3
+- id: 7
+  created_at: "2026-10-07T08:00:00Z"
+  updated_at: "2026-10-07T08:00:00Z"
+  title: "Testing Loco apps end to end"
+  body: "Testing Loco apps end to end. This article is seed data for the dogfood app."
+  status: Review
+  featured: true
+  views: 310
+  rating: 4.2
+  published_at: null
+  price: "14.00"
+  metadata: {"reading_minutes": 10}
+  user_id: 1
+  category_id: 1
+- id: 8
+  created_at: "2026-10-08T08:00:00Z"
+  updated_at: "2026-10-08T08:00:00Z"
+  title: "Pricing experiments"
+  body: "Pricing experiments. This article is seed data for the dogfood app."
+  status: Draft
+  featured: false
+  views: 5
+  rating: 2.5
+  published_at: null
+  price: "99.00"
+  metadata: {"reading_minutes": 11}
+  user_id: 2
+  category_id: 2
+- id: 9
+  created_at: "2026-10-09T08:00:00Z"
+  updated_at: "2026-10-09T08:00:00Z"
+  title: "100% uptime is a myth"
+  body: "100% uptime is a myth. This article is seed data for the dogfood app."
+  status: Published
+  featured: false
+  views: 2100
+  rating: 4.9
+  published_at: "2026-10-09T09:00:00Z"
+  price: "0.00"
+  metadata: null
+  user_id: 1
+  category_id: null
+- id: 10
+  created_at: "2026-10-10T08:00:00Z"
+  updated_at: "2026-10-10T08:00:00Z"
+  title: "Writing migrations safely"
+  body: "Writing migrations safely. This article is seed data for the dogfood app."
+  status: Published
+  featured: false
+  views: 870
+  rating: 4.4
+  published_at: "2026-10-10T09:00:00Z"
+  price: "7.25"
+  metadata: {"reading_minutes": 13}
+  user_id: 2
+  category_id: 1
+- id: 11
+  created_at: "2026-10-11T08:00:00Z"
+  updated_at: "2026-10-11T08:00:00Z"
+  title: "Onboarding new engineers"
+  body: "Onboarding new engineers. This article is seed data for the dogfood app."
+  status: Draft
+  featured: false
+  views: 0
+  rating: null
+  published_at: null
+  price: "0.00"
+  metadata: {"reading_minutes": 14}
+  user_id: 1
+  category_id: 3
+- id: 12
+  created_at: "2026-10-12T08:00:00Z"
+  updated_at: "2026-10-12T08:00:00Z"
+  title: "Hiring for craft"
+  body: "Hiring for craft. This article is seed data for the dogfood app."
+  status: Review
+  featured: false
+  views: 44
+  rating: 3.1
+  published_at: null
+  price: "0.00"
+  metadata: null
+  user_id: 2
+  category_id: 3

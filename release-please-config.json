@@ -1,0 +1,20 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/v17.11.2/schemas/config.json",
+  "packages": {
+    ".": {
+      "release-type": "rust",
+      "include-component-in-tag": false,
+      "bump-minor-pre-major": true,
+      "bump-patch-for-minor-pre-major": true,
+      "extra-files": [
+        { "type": "generic", "path": "README.md" },
+        { "type": "generic", "path": "dogfood/Cargo.toml" },
+        {
+          "type": "toml",
+          "path": "dogfood/Cargo.lock",
+          "jsonpath": "$.package[?(@.name.value == 'muy-loco-admin')].version"
+        }
+      ]
+    }
+  }
+}

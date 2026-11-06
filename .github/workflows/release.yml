@@ -1,0 +1,67 @@
+# Runs once CI passes on a push to main. release-please keeps the release PR up to date; when that
+# PR is merged it tags a GitHub release, and the crate is then published to crates.io with trusted
+# publishing (no stored token). crates.io trusted publisher: workflow `release.yml`, environment
+# `release`.
+name: Release
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_VERSION: 1.99.1 # keep in sync with ci.yml
+
+jobs:
+  release-please:
+    name: Release Please
+    # `branches` matches the triggering run's head branch name, which a fork's PR can also use.
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write # release PR branch, tags and GitHub releases
+      issues: write # release PR labels
+      pull-requests: write # release PR
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@v5.0.0
+        id: release
+
+  publish:
+    name: Publish ${{ needs.release-please.outputs.tag_name }} to crates.io
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: read
+      id-token: write # trusted publishing
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+          persist-credentials: false
+      # No rust-cache here: a publish should not build from caches other runs can write.
+      - name: Install Rust
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal
+          rustup default "$RUST_VERSION"
+      - uses: rust-lang/crates-io-auth-action@v1.0.6
+        id: auth
+      - run: cargo publish --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}

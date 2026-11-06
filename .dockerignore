@@ -1,0 +1,6 @@
+**/target
+**/node_modules
+.git
+frontend/coverage
+dogfood/e2e
+lcov.info

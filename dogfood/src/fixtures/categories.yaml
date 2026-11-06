@@ -1,0 +1,18 @@
+---
+- id: 1
+  created_at: "2026-10-01T08:00:00Z"
+  updated_at: "2026-10-01T08:00:00Z"
+  name: Engineering
+  slug: engineering
+  description: Posts about building software.
+- id: 2
+  created_at: "2026-10-02T08:00:00Z"
+  updated_at: "2026-10-02T08:00:00Z"
+  name: Product
+  slug: product
+  description: Roadmaps and releases.
+- id: 3
+  created_at: "2026-10-03T08:00:00Z"
+  updated_at: "2026-10-03T08:00:00Z"
+  name: Culture
+  slug: culture

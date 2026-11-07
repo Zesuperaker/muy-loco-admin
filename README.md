@@ -130,7 +130,16 @@ must send `X-Requested-With: muy-loco-admin`; the UI does both.
 
 The login form signs users in with Loco's session (`auth.session`): an `HttpOnly`,
 `SameSite=Lax` cookie, `Secure` when `server.host` is `https://`. The app shares it, so signing in
-or out of the admin does the same in the app; the user id is the user's `pid`. For production:
+or out of the admin does the same in the app. Two things follow:
+
+- The admin reads the session's user id as the user's `pid`, so every `Session::set_user_id` in
+  your app, OAuth's `on_sign_in` included, must pass the `pid`. Any other id, such as a username,
+  could sign someone in as the user whose `pid` it happens to match.
+- Every way your app signs users in (password, OAuth, magic links, remember-me) also signs admin
+  users into the admin. The `JwtAuth::new` check, such as `user.is_admin`, still runs on every
+  request.
+
+For production:
 
 ```yaml
 auth:
@@ -141,9 +150,16 @@ auth:
 ```
 
 With the default `cookie` store a copied cookie keeps working until `max_age`, even after
-sign-out. The admin refuses to mount when the login form could not work: no secret outside
-development and test, a `__Host-` or `__Secure-` cookie without `Secure`, or a server-side store
-without Loco's `auth_session` middleware.
+sign-out or a password change. With a server-side store, also end a user's sessions wherever your
+app changes a password:
+
+```rust
+loco_rs::auth::session_store::sign_out_everywhere(&ctx, &user.pid.to_string()).await?;
+```
+
+The admin refuses to mount when the login form could not work: no secret outside development and
+test, a `__Host-` or `__Secure-` cookie without `Secure`, or a server-side store without Loco's
+`auth_session` middleware.
 
 ## Middleware
 

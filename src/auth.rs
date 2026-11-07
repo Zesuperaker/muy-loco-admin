@@ -194,6 +194,10 @@ mod jwt {
     /// user is loaded by `pid` with [`Authenticable::find_by_claims_key`] and
     /// must pass the `allow` check on every request.
     ///
+    /// The session is the app's own: the admin reads its user id as the
+    /// user's `pid`, so the app must sign users in with their `pid` too, and
+    /// any way the app signs a user in also opens the admin to admin users.
+    ///
     /// ```rust,ignore
     /// JwtAuth::<users::Model>::new(|user| user.is_admin)
     ///     .login_endpoint("/api/auth/login")

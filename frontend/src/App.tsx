@@ -7,7 +7,7 @@ import { Layout } from "./components/Layout";
 import { Login } from "./components/Login";
 import { ModelList } from "./components/ModelList";
 import { RecordPage } from "./components/RecordPage";
-import { ErrorBanner, Spinner } from "./components/ui";
+import { ErrorBanner, Spinner, useToast } from "./components/ui";
 import { paths } from "./paths";
 import type { AdminConfig, AdminUser, ModelMeta } from "./types";
 
@@ -106,6 +106,7 @@ function Shell({
 
 export function App() {
   const queryClient = useQueryClient();
+  const { notify } = useToast();
   const config = useQuery({ queryKey: ["config"], queryFn: api.config, staleTime: Infinity });
   const me = useQuery({
     queryKey: ["me"],
@@ -131,10 +132,10 @@ export function App() {
     void queryClient.resetQueries({ predicate: (q) => q.queryKey[0] !== "config" });
   };
   const signOut = () => {
-    void api
-      .signOut()
-      .catch(() => undefined)
-      .finally(restart);
+    // On failure the session may still be valid, so stay signed in and say so.
+    api.signOut().then(restart, (err: unknown) => {
+      notify(`Sign-out failed: ${err instanceof Error ? err.message : String(err)}`, "error");
+    });
   };
 
   if (config.isPending) return <Spinner />;

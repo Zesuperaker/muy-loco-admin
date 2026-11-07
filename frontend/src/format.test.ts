@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { InputError, display, fromInput, keyText, toInput, toLocalInput } from "./format";
+import {
+  InputError,
+  display,
+  displayFull,
+  encodeKeyPart,
+  fromInput,
+  keyText,
+  toInput,
+  toLocalInput,
+} from "./format";
+import { parseJson } from "./json";
 import { field } from "./test/utils";
 import { paths } from "./paths";
 
@@ -97,5 +107,38 @@ describe("paths", () => {
     expect(paths.list("post tags", "?q=1")).toBe("/models/post%20tags?q=1");
     expect(paths.create("posts")).toBe("/models/posts/new");
     expect(paths.record("post_tags", "1,a%2Cb")).toBe("/models/post_tags/records/1%2Ca%252Cb");
+  });
+});
+
+describe("pre-release fixes", () => {
+  it("sends integers JavaScript would round as text", () => {
+    const f = field("views", { kind: "integer" });
+    expect(fromInput(f, "42")).toBe(42);
+    expect(fromInput(f, " -9007199254740991 ")).toBe(-9007199254740991);
+    expect(fromInput(f, "9007199254740993")).toBe("9007199254740993");
+    expect(() => fromInput(f, "1e3")).toThrow("must be a whole number");
+  });
+
+  it("keeps big integers in JSON exactly", () => {
+    const value = parseJson('{"n":9007199254740993,"small":1,"float":1.5,"list":[12345678901234567890]}');
+    expect(JSON.stringify(value)).toBe('{"n":9007199254740993,"small":1,"float":1.5,"list":[12345678901234567890]}');
+    const f = field("meta", { kind: "json" });
+    expect(JSON.stringify(fromInput(f, '{"n": 9007199254740993}'))).toBe('{"n":9007199254740993}');
+  });
+
+  it("shows whole values for read-only fields", () => {
+    const text = field("body", { kind: "text" });
+    expect(displayFull(text, "y".repeat(100))).toBe("y".repeat(100));
+    expect(display(text, "y".repeat(100))).toHaveLength(80);
+    expect(displayFull(field("meta", { kind: "json" }), { a: 1 })).toBe('{\n  "a": 1\n}');
+    expect(displayFull(text, null)).toBe("—");
+    expect(displayFull(field("flag", { kind: "boolean" }), true)).toBe("Yes");
+  });
+
+  it("encodes key parts like the server", () => {
+    expect(encodeKeyPart("plain-1_a.b")).toBe("plain-1_a.b");
+    expect(encodeKeyPart("a,b%c")).toBe("a%2Cb%25c");
+    expect(encodeKeyPart("é\n")).toBe("%C3%A9%0A");
+    expect(encodeKeyPart("a/b ?")).toBe("a/b ?");
   });
 });

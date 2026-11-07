@@ -1130,7 +1130,10 @@ async fn integers_beyond_javascript_precision_are_strings() {
         .await
         .json();
     assert_eq!(list["total"], 1);
-    assert_eq!(list["records"][0]["values"]["user_id"], user.id, "small stay numbers");
+    assert_eq!(
+        list["records"][0]["values"]["user_id"], user.id,
+        "small stay numbers"
+    );
 }
 
 #[tokio::test]
@@ -1198,10 +1201,17 @@ async fn lookup_finds_records_by_key() {
             .iter()
             .map(|c| c["key"].as_str().unwrap())
             .collect();
-        assert!(keys.contains(&first.to_string().as_str()), "{model}: {keys:?}");
+        assert!(
+            keys.contains(&first.to_string().as_str()),
+            "{model}: {keys:?}"
+        );
     }
     let body = client.get("/api/models/bare/lookup").await.json();
-    assert_eq!(body["choices"].as_array().unwrap().len(), 20, "newest first");
+    assert_eq!(
+        body["choices"].as_array().unwrap().len(),
+        20,
+        "newest first"
+    );
 }
 
 #[tokio::test]
@@ -1227,7 +1237,7 @@ async fn out_of_range_pages_and_json_filters_are_bad_requests() {
 
 #[tokio::test]
 async fn values_the_database_rejects_are_validation_errors() {
-    use sea_orm::{ConnectionTrait, DbBackend};
+    use sea_orm::DbBackend;
     let (db, _ctx, client) = client().await;
     let user = create_user(&db.db, "ann@example.com", true).await;
     let postgres = db.db.get_database_backend() == DbBackend::Postgres;

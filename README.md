@@ -24,7 +24,7 @@ Add the crate:
 <!-- x-release-please-start-version -->
 ```toml
 [dependencies]
-muy-loco-admin = "0.0.1"
+muy-loco-admin = "0.1.0"
 ```
 <!-- x-release-please-end -->
 

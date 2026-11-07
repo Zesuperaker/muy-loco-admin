@@ -208,7 +208,7 @@ cd dogfood/e2e && npm ci && npx playwright install chromium && npm test
 Commit messages and PR titles follow [Conventional Commits](https://www.conventionalcommits.org),
 and branches are named `<type>/<topic>` (`feat/site-link`). After CI passes on `main`, release-please keeps a release PR up to date with the next version and
 changelog; merging it tags the release and publishes the crate to crates.io. Below 1.0, `fix:`
-and `feat:` bump the patch version and breaking changes (`feat!:`) the minor.
+bumps the patch version, and `feat:` and breaking changes (`feat!:`) the minor.
 
 Dogfood logins (password `12341234`): `user1@example.com` (admin), `user2@example.com`
 (no admin access). The database is reseeded on every start; set `SEED_ON_START=false` to keep

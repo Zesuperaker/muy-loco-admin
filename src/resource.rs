@@ -163,6 +163,42 @@ fn is_sensitive(name: &str) -> bool {
     SENSITIVE.iter().any(|s| lower.contains(s))
 }
 
+/// Spellings of `q` to look for in `lower(column)`. SQLite's `lower()`, and
+/// Postgres's under the `C` locale, only lowercase ASCII, so non-ASCII
+/// letters keep their stored case: `q` is tried as typed and in lower, upper
+/// and title case, with ASCII lowercased like `lower()` does.
+fn search_terms(q: &str) -> Vec<String> {
+    let mut word_start = true;
+    let title: String = q
+        .chars()
+        .flat_map(|c| {
+            let cased: Vec<char> = if word_start {
+                c.to_uppercase().collect()
+            } else {
+                c.to_lowercase().collect()
+            };
+            word_start = !c.is_alphanumeric();
+            cased
+        })
+        .collect();
+    let mut terms: Vec<String> = [q.to_string(), q.to_lowercase(), q.to_uppercase(), title]
+        .iter()
+        .map(|term| term.to_ascii_lowercase())
+        .collect();
+    terms.sort();
+    terms.dedup();
+    terms
+}
+
+/// `lower(column)` as text, for case-insensitive `LIKE`.
+fn lowered<E: EntityTrait>(column: &Column<E>) -> Expr {
+    let mut expr = Expr::col((E::default(), column.col));
+    if !column.kind.is_textual() {
+        expr = expr.cast_as(Alias::new("text"));
+    }
+    Expr::expr(Func::lower(expr))
+}
+
 fn escape_like(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     for c in input.chars() {
@@ -406,6 +442,15 @@ where
         let list_filter = match config.list_filter {
             Some(list) => {
                 visible("list_filter", &list)?;
+                if let Some(field) = list.iter().find(|name| {
+                    fields
+                        .iter()
+                        .any(|f| &f.name == *name && f.kind == FieldKind::Json)
+                }) {
+                    return Err(format!(
+                        "model `{name}`: JSON field `{field}` cannot be used in list_filter"
+                    ));
+                }
                 list
             }
             None => fields
@@ -558,23 +603,16 @@ where
         if let Some(q) = &params.q
             && !self.search.is_empty()
         {
-            let pattern = format!("%{}%", escape_like(&q.to_lowercase()));
-            let mut any = Condition::any();
-            for idx in &self.search {
-                let column = &self.columns[*idx];
-                let mut expr = Expr::col((E::default(), column.col));
-                if !column.kind.is_textual() {
-                    expr = expr.cast_as(Alias::new("text"));
-                }
-                any = any.add(
-                    Expr::expr(Func::lower(expr)).like(LikeExpr::new(pattern.clone()).escape('\\')),
-                );
-            }
-            cond = cond.add(any);
+            cond = cond.add(self.search_condition(q));
         }
         let mut errors = FieldErrors::new();
         for (field, raw) in &params.filters {
             let column = self.column(field)?;
+            if column.kind == FieldKind::Json {
+                return Err(AdminError::bad_request(format!(
+                    "cannot filter by the JSON field `{field}`"
+                )));
+            }
             match raw.as_str() {
                 NULL_FILTER => cond = cond.add(column.col.is_null()),
                 NOT_NULL_FILTER => cond = cond.add(column.col.is_not_null()),
@@ -596,16 +634,43 @@ where
         Ok(E::find().filter(cond))
     }
 
+    /// Records whose search fields contain `q`, ignoring case.
+    fn search_condition(&self, q: &str) -> Condition {
+        let mut any = Condition::any();
+        for term in search_terms(q) {
+            let pattern = format!("%{}%", escape_like(&term));
+            for idx in &self.search {
+                any = any.add(
+                    lowered(&self.columns[*idx]).like(LikeExpr::new(pattern.clone()).escape('\\')),
+                );
+            }
+        }
+        any
+    }
+
     fn ordered(&self, params: &ListParams) -> AdminResult<Select<E>> {
         let (col, default_dir) = match &params.sort {
             Some(field) => (self.column(field)?.col, SortDirection::Asc),
             None => self.order,
         };
+        let json = self
+            .columns
+            .iter()
+            .any(|c| c.col.as_str() == col.as_str() && c.kind == FieldKind::Json);
         let order = match params.order.unwrap_or(default_dir) {
             SortDirection::Asc => Order::Asc,
             SortDirection::Desc => Order::Desc,
         };
-        let mut query = self.query(params)?.order_by(col, order.clone());
+        let query = self.query(params)?;
+        // Postgres's `json` type has no ordering; its text form does.
+        let mut query = if json {
+            query.order_by(
+                Expr::col((E::default(), col)).cast_as(Alias::new("text")),
+                order.clone(),
+            )
+        } else {
+            query.order_by(col, order.clone())
+        };
         for pk in &self.pk {
             if pk.as_str() != col.as_str() {
                 query = query.order_by(*pk, order.clone());
@@ -733,13 +798,14 @@ where
 
     async fn list(&self, db: &DatabaseConnection, params: &ListParams) -> AdminResult<Page> {
         let per_page = params.per_page.unwrap_or(self.meta.per_page);
+        // Databases take a signed 64-bit offset.
+        let offset = (params.page - 1)
+            .checked_mul(per_page)
+            .filter(|offset| i64::try_from(*offset).is_ok())
+            .ok_or_else(|| AdminError::bad_request("`page` is too large"))?;
         let query = self.ordered(params)?;
         let total = self.query(params)?.count(db).await?;
-        let models = query
-            .offset((params.page - 1).saturating_mul(per_page))
-            .limit(per_page)
-            .all(db)
-            .await?;
+        let models = query.offset(offset).limit(per_page).all(db).await?;
         Ok(Page {
             records: models.iter().map(|m| self.record(m)).collect(),
             total,
@@ -816,17 +882,30 @@ where
         limit: u64,
     ) -> AdminResult<Vec<Choice>> {
         let value_col = match column {
-            Some(name) => self.column(name)?.col,
-            None => self.pk[0],
+            Some(name) => self.column(name)?,
+            None => self
+                .columns
+                .iter()
+                .find(|c| c.col.as_str() == self.pk[0].as_str())
+                .ok_or(AdminError::NotFound)?,
         };
         let params = ListParams {
             page: 1,
-            q: q.map(str::trim)
-                .filter(|q| !q.is_empty())
-                .map(ToString::to_string),
             ..ListParams::default()
         };
-        let models = self.ordered(&params)?.limit(limit).all(db).await?;
+        let mut select = self.ordered(&params)?;
+        if let Some(q) = q.map(str::trim).filter(|q| !q.is_empty()) {
+            // The search fields contain `q`, or the picked value (usually
+            // the key) starts with it, so records without text fields can be
+            // found too.
+            let prefix = format!("{}%", escape_like(&q.to_lowercase()));
+            select = select.filter(
+                self.search_condition(q)
+                    .add(lowered(value_col).like(LikeExpr::new(prefix).escape('\\'))),
+            );
+        }
+        let value_col = value_col.col;
+        let models = select.limit(limit).all(db).await?;
         Ok(models
             .iter()
             .map(|m| {

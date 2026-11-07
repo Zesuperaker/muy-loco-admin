@@ -141,6 +141,30 @@ fn rejected(err: &DbErr, message: &str) -> String {
     message.to_string()
 }
 
+/// The SQLSTATE of an error Postgres returned. `SeaORM` only exposes the
+/// driver's error when an sqlx driver feature is on, which the app turns on
+/// but this crate cannot require, so it is read from the error's debug form,
+/// where sqlx prints it right after the severity:
+/// `PgDatabaseError { severity: Error, code: "22003", message: ... }`.
+fn postgres_code(err: &DbErr) -> Option<String> {
+    const CODE: &str = "code: \"";
+    let debug = format!("{err:?}");
+    let rest = &debug[debug.find("PgDatabaseError { severity: ")?..];
+    let start = rest.find(CODE)? + CODE.len();
+    let code = rest.get(start..start + 5)?;
+    code.chars()
+        .all(|c| c.is_ascii_alphanumeric())
+        .then(|| code.to_string())
+}
+
+/// Whether Postgres rejected the submitted values: SQLSTATE class 22 (data
+/// exception, such as a number out of range or a NUL character in text) or 23
+/// (integrity constraint, such as NOT NULL or CHECK). Unlike the message, the
+/// code does not depend on the server's language.
+fn rejects_values(err: &DbErr) -> bool {
+    postgres_code(err).is_some_and(|code| code.starts_with("22") || code.starts_with("23"))
+}
+
 impl From<DbErr> for AdminError {
     fn from(err: DbErr) -> Self {
         match err.sql_err() {
@@ -178,7 +202,7 @@ impl From<DbErr> for AdminError {
             }
             other => {
                 let msg = other.to_string();
-                if is_constraint_message(&msg) {
+                if rejects_values(&other) || is_constraint_message(&msg) {
                     Self::Validation {
                         message: rejected(&other, "the database rejected these values"),
                         fields: FieldErrors::new(),

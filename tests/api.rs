@@ -972,6 +972,10 @@ async fn invalid_model_configuration_fails_at_mount() {
             "unknown field `x` in hidden_fields",
         ),
         (
+            Admin::new(AllowAll).register(ModelAdmin::<posts::Entity>::new().list_filter(["meta"])),
+            "JSON field `meta` cannot be used in list_filter",
+        ),
+        (
             Admin::new(AllowAll).register(ModelAdmin::<users::Entity>::new().show_fields(["x"])),
             "unknown field `x` in show_fields",
         ),
@@ -1093,4 +1097,157 @@ async fn custom_configuration_is_applied() {
     assert_eq!(res.status, 403);
     assert_eq!(client.get("/api/models/users/records").await.status, 404);
     drop(db);
+}
+
+#[tokio::test]
+async fn integers_beyond_javascript_precision_are_strings() {
+    let (db, _ctx, client) = client().await;
+    let user = create_user(&db.db, "ann@example.com", true).await;
+    let mut input = new_post(user.id);
+    input["views"] = json!("9007199254740993");
+    let res = client.post("/api/models/posts/records", input).await;
+    assert_eq!(res.status, StatusCode::CREATED, "{}", res.text());
+    let record = res.json()["record"].clone();
+    assert_eq!(record["values"]["views"], "9007199254740993");
+    let key = record["key"].as_str().unwrap();
+    let stored = posts::Entity::find_by_id(key.parse::<i32>().unwrap())
+        .one(&db.db)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.views, 9_007_199_254_740_993);
+
+    // The UI sends the string back unchanged.
+    let res = client
+        .patch(
+            &format!("/api/models/posts/records/{key}"),
+            json!({"views": "9007199254740995"}),
+        )
+        .await;
+    assert_eq!(res.json()["record"]["values"]["views"], "9007199254740995");
+    let list = client
+        .get("/api/models/posts/records?filter.views=9007199254740995")
+        .await
+        .json();
+    assert_eq!(list["total"], 1);
+    assert_eq!(list["records"][0]["values"]["user_id"], user.id, "small stay numbers");
+}
+
+#[tokio::test]
+async fn search_ignores_case_of_non_ascii_letters() {
+    let (db, _ctx, client) = client().await;
+    let user = create_user(&db.db, "ann@example.com", true).await;
+    for title in ["Москва", "Élan vital", "ÄRGER", "plain"] {
+        create_post(&db.db, user.id, title).await;
+    }
+    for (q, expected) in [
+        ("Москва", "Москва"),
+        ("москва", "Москва"),
+        ("МОСКВА", "Москва"),
+        ("élan", "Élan vital"),
+        ("Élan Vital", "Élan vital"),
+        ("ärger", "ÄRGER"),
+        ("ÄRGER", "ÄRGER"),
+        ("PLAIN", "plain"),
+    ] {
+        let body = client
+            .get(&format!(
+                "/api/models/posts/records?q={}",
+                percent_encoding::utf8_percent_encode(q, percent_encoding::NON_ALPHANUMERIC)
+            ))
+            .await
+            .json();
+        let titles: Vec<&str> = body["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["values"]["title"].as_str().unwrap())
+            .collect();
+        assert_eq!(titles, [expected], "q={q}");
+    }
+}
+
+#[tokio::test]
+async fn lookup_finds_records_by_key() {
+    let (db, ctx) = setup().await;
+    let router = Admin::new(AllowAll)
+        .register(
+            ModelAdmin::<posts::Entity>::new()
+                .name("bare")
+                .search_fields(Vec::<String>::new()),
+        )
+        .model::<posts::Entity>()
+        .router(&ctx)
+        .unwrap();
+    let client = Client::new(router);
+    let user = create_user(&db.db, "ann@example.com", true).await;
+    let mut first = None;
+    for i in 0..30 {
+        let post = create_post(&db.db, user.id, &format!("post {i}")).await;
+        first.get_or_insert(post.id);
+    }
+    let first = first.unwrap();
+    for model in ["bare", "posts"] {
+        let body = client
+            .get(&format!("/api/models/{model}/lookup?q={first}"))
+            .await
+            .json();
+        let keys: Vec<&str> = body["choices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["key"].as_str().unwrap())
+            .collect();
+        assert!(keys.contains(&first.to_string().as_str()), "{model}: {keys:?}");
+    }
+    let body = client.get("/api/models/bare/lookup").await.json();
+    assert_eq!(body["choices"].as_array().unwrap().len(), 20, "newest first");
+}
+
+#[tokio::test]
+async fn out_of_range_pages_and_json_filters_are_bad_requests() {
+    let (db, _ctx, client) = client().await;
+    let user = create_user(&db.db, "ann@example.com", true).await;
+    create_post(&db.db, user.id, "p").await;
+    for uri in [
+        "/api/models/posts/records?page=999999999999999999",
+        "/api/models/posts/records?page=36893488147419103&per_page=500",
+    ] {
+        let res = client.get(uri).await;
+        assert_eq!(res.status, 400, "{uri}: {}", res.text());
+        assert_eq!(res.json()["error"], "`page` is too large");
+    }
+    let res = client
+        .get("/api/models/posts/records?filter.meta=%7B%7D")
+        .await;
+    assert_eq!(res.status, 400, "{}", res.text());
+    let res = client.get("/api/models/posts/records?sort=meta").await;
+    assert_eq!(res.status, 200, "JSON sorts by its text: {}", res.text());
+}
+
+#[tokio::test]
+async fn values_the_database_rejects_are_validation_errors() {
+    use sea_orm::{ConnectionTrait, DbBackend};
+    let (db, _ctx, client) = client().await;
+    let user = create_user(&db.db, "ann@example.com", true).await;
+    let postgres = db.db.get_database_backend() == DbBackend::Postgres;
+    for (name, field, value) in [
+        ("too large decimal", "price", json!("123456789012.50")),
+        ("NUL in text", "title", json!("a\u{0}b")),
+        ("NUL in JSON", "meta", json!({"k": "\u{0}"})),
+    ] {
+        let mut input = new_post(user.id);
+        input[field] = value;
+        let res = client.post("/api/models/posts/records", input).await;
+        if postgres {
+            assert_eq!(res.status, 422, "{name}: {}", res.text());
+            assert_eq!(
+                res.json()["error"],
+                "the database rejected these values",
+                "{name}"
+            );
+        } else {
+            assert_eq!(res.status, StatusCode::CREATED, "{name}: {}", res.text());
+        }
+    }
 }

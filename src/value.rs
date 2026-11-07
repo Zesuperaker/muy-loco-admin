@@ -19,6 +19,27 @@ use sea_orm::{
 };
 use serde_json::Value as Json;
 
+/// Largest integer JavaScript represents exactly (`Number.MAX_SAFE_INTEGER`).
+const MAX_SAFE_INTEGER: i64 = (1 << 53) - 1;
+
+/// A JSON number, or a string for integers JavaScript would round; the API
+/// accepts integers as strings, so the UI can send them back unchanged.
+fn int_json(value: i64) -> Json {
+    if (-MAX_SAFE_INTEGER..=MAX_SAFE_INTEGER).contains(&value) {
+        Json::from(value)
+    } else {
+        Json::String(value.to_string())
+    }
+}
+
+fn uint_json(value: u64) -> Json {
+    if value <= MAX_SAFE_INTEGER.unsigned_abs() {
+        Json::from(value)
+    } else {
+        Json::String(value.to_string())
+    }
+}
+
 /// Convert a database value into the JSON sent to the UI.
 pub(crate) fn to_json(value: &Value) -> Json {
     match value {
@@ -26,13 +47,16 @@ pub(crate) fn to_json(value: &Value) -> Json {
         Value::TinyInt(v) => v.map_or(Json::Null, Json::from),
         Value::SmallInt(v) => v.map_or(Json::Null, Json::from),
         Value::Int(v) => v.map_or(Json::Null, Json::from),
-        Value::BigInt(v) => v.map_or(Json::Null, Json::from),
+        Value::BigInt(v) => v.map_or(Json::Null, int_json),
         Value::TinyUnsigned(v) => v.map_or(Json::Null, Json::from),
         Value::SmallUnsigned(v) => v.map_or(Json::Null, Json::from),
         Value::Unsigned(v) => v.map_or(Json::Null, Json::from),
-        Value::BigUnsigned(v) => v.map_or(Json::Null, Json::from),
+        Value::BigUnsigned(v) => v.map_or(Json::Null, uint_json),
+        // Through the shortest decimal form: `f64::from(0.1_f32)` is
+        // 0.10000000149011612.
         Value::Float(v) => v
-            .and_then(|f| serde_json::Number::from_f64(f64::from(f)))
+            .and_then(|f| f.to_string().parse::<f64>().ok())
+            .and_then(serde_json::Number::from_f64)
             .map_or(Json::Null, Json::Number),
         Value::Double(v) => v
             .and_then(serde_json::Number::from_f64)
@@ -483,6 +507,36 @@ mod tests {
         );
         assert_eq!(to_json(&Value::Int(None)), Json::Null);
         assert_eq!(to_json(&Value::Json(None)), Json::Null);
+    }
+
+    #[test]
+    fn integers_javascript_would_round_are_strings() {
+        let max = (1_i64 << 53) - 1;
+        assert_eq!(to_json(&Value::BigInt(Some(max))), json!(max));
+        assert_eq!(to_json(&Value::BigInt(Some(-max))), json!(-max));
+        assert_eq!(
+            to_json(&Value::BigInt(Some(max + 2))),
+            json!("9007199254740993")
+        );
+        assert_eq!(
+            to_json(&Value::BigInt(Some(i64::MIN))),
+            json!(i64::MIN.to_string())
+        );
+        assert_eq!(to_json(&Value::BigUnsigned(Some(42))), json!(42));
+        assert_eq!(
+            to_json(&Value::BigUnsigned(Some(u64::MAX))),
+            json!(u64::MAX.to_string())
+        );
+        assert_eq!(to_text(&Value::BigInt(Some(max + 2))), "9007199254740993");
+        let back = candidates(&ColumnType::BigInteger, &json!("9007199254740993")).unwrap();
+        assert_eq!(back[0], Value::BigInt(Some(max + 2)));
+    }
+
+    #[test]
+    fn single_precision_floats_keep_their_short_form() {
+        assert_eq!(to_json(&Value::Float(Some(0.1))), json!(0.1));
+        assert_eq!(to_text(&Value::Float(Some(0.1))), "0.1");
+        assert_eq!(to_json(&Value::Float(Some(f32::NAN))), Json::Null);
     }
 
     #[test]

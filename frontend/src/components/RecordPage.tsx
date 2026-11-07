@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { ApiError, type RecordResponse, api } from "../api";
-import { InputError, display, fromInput, keyText, toInput } from "../format";
+import { InputError, displayFull, fromInput, keyText, toInput } from "../format";
 import { paths } from "../paths";
 import type { FieldMeta, JsonValue, ModelMeta } from "../types";
 import { FieldInput } from "./FieldInput";
@@ -107,6 +107,14 @@ function RecordForm({
     save.mutate(values);
   };
 
+  // Errors for fields the form does not show (read-only on create, or a
+  // model-wide `__all__`) would otherwise be lost.
+  const otherErrors = Object.entries(errors).flatMap(([name, messages]) => {
+    if (fields.some((f) => f.name === name)) return [];
+    const label = model.fields.find((f) => f.name === name)?.label;
+    return messages.map((message) => (name === "__all__" || !label ? message : `${label}: ${message}`));
+  });
+
   const related = data
     ? model.related.flatMap((rel) => {
         const child = models.find((m) => m.name === rel.model);
@@ -150,6 +158,13 @@ function RecordForm({
       </div>
 
       {save.error && <ErrorBanner error={save.error} />}
+      {otherErrors.length > 0 && (
+        <ul role="alert" className="list-disc rounded-md bg-rose-50 py-2 pr-4 pl-8 text-sm text-rose-700">
+          {otherErrors.map((message) => (
+            <li key={message}>{message}</li>
+          ))}
+        </ul>
+      )}
 
       <Card className="divide-y divide-slate-100">
         {fields.map((field) => {
@@ -183,7 +198,7 @@ function RecordForm({
                   <output id={`field-${field.name}`} className="block pt-1.5 text-sm break-all whitespace-pre-wrap">
                     {field.kind === "json" && value !== null && value !== undefined
                       ? JSON.stringify(value, null, 2)
-                      : (labels[field.name] ?? display(field, value))}
+                      : (labels[field.name] ?? displayFull(field, value))}
                   </output>
                 )}
                 {fieldErrors.map((message) => (

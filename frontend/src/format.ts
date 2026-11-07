@@ -1,3 +1,4 @@
+import { parseJson } from "./json";
 import type { FieldMeta, JsonValue } from "./types";
 
 const pad = (n: number) => String(n).padStart(2, "0");
@@ -42,7 +43,9 @@ export function fromInput(field: FieldMeta, text: string): JsonValue {
   switch (field.kind) {
     case "integer": {
       if (!/^-?\d+$/.test(trimmed)) throw new InputError("must be a whole number");
-      return Number(trimmed);
+      const n = Number(trimmed);
+      // Integers JavaScript would round go as text, which the API accepts.
+      return Number.isSafeInteger(n) ? n : trimmed;
     }
     case "float": {
       const n = Number(trimmed);
@@ -56,7 +59,7 @@ export function fromInput(field: FieldMeta, text: string): JsonValue {
       return trimmed === "true";
     case "json":
       try {
-        return JSON.parse(trimmed) as JsonValue;
+        return parseJson(trimmed) as JsonValue;
       } catch {
         throw new InputError("must be valid JSON");
       }
@@ -76,11 +79,11 @@ function truncate(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
-/** Short text for a table cell. */
-export function display(field: FieldMeta | undefined, value: JsonValue | undefined): string {
+/** The whole value as text, for a read-only field. */
+export function displayFull(field: FieldMeta | undefined, value: JsonValue | undefined): string {
   if (value === null || value === undefined) return "—";
   if (typeof value === "boolean") return value ? "Yes" : "No";
-  if (typeof value === "object") return truncate(JSON.stringify(value), 60);
+  if (typeof value === "object") return JSON.stringify(value, null, 2);
   const text = String(value);
   if (field?.kind === "date_time") {
     if (field.timezone) {
@@ -89,7 +92,28 @@ export function display(field: FieldMeta | undefined, value: JsonValue | undefin
     }
     return text.replace("T", " ").replace(/\.\d+$/, "");
   }
-  return truncate(text, 80);
+  return text;
+}
+
+/** Short text for a table cell. */
+export function display(field: FieldMeta | undefined, value: JsonValue | undefined): string {
+  if (value !== null && typeof value === "object") return truncate(JSON.stringify(value), 60);
+  return truncate(displayFull(field, value), 80);
+}
+
+/**
+ * A record key part as the server encodes it (`encode_key`): `%`, `,`,
+ * control and non-ASCII characters percent-encoded.
+ */
+export function encodeKeyPart(text: string): string {
+  let out = "";
+  for (const byte of new TextEncoder().encode(text)) {
+    out +=
+      byte < 0x20 || byte >= 0x7f || byte === 0x25 || byte === 0x2c
+        ? `%${byte.toString(16).toUpperCase().padStart(2, "0")}`
+        : String.fromCharCode(byte);
+  }
+  return out;
 }
 
 /** Text of a value used as a key in label maps and filters. */

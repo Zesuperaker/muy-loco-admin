@@ -156,7 +156,7 @@ pub struct ActionMeta {
     pub label: String,
 }
 
-/// Operations a model supports, before per-user permissions are applied.
+/// Operations a model supports, the same for every admin user.
 #[derive(Debug, Clone, Copy, Serialize)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct Capabilities {

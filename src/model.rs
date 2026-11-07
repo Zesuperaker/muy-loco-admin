@@ -42,7 +42,8 @@ pub struct ModelAdmin<E: EntityTrait> {
     pub(crate) search_fields: Option<Vec<String>>,
     pub(crate) list_filter: Option<Vec<String>>,
     pub(crate) readonly_fields: Option<Vec<String>>,
-    pub(crate) hidden_fields: Option<Vec<String>>,
+    pub(crate) hidden_fields: Vec<String>,
+    pub(crate) show_fields: Vec<String>,
     pub(crate) ordering: Option<(String, SortDirection)>,
     pub(crate) per_page: Option<u64>,
     pub(crate) display_field: Option<String>,
@@ -76,7 +77,8 @@ impl<E: EntityTrait> ModelAdmin<E> {
             search_fields: None,
             list_filter: None,
             readonly_fields: None,
-            hidden_fields: None,
+            hidden_fields: Vec::new(),
+            show_fields: Vec::new(),
             ordering: None,
             per_page: None,
             display_field: None,
@@ -134,12 +136,20 @@ impl<E: EntityTrait> ModelAdmin<E> {
         self
     }
 
-    /// Columns never sent to or accepted from the UI. Defaults to columns
-    /// whose name contains `password`, `secret`, `token`, `api_key` or
-    /// `salt`. Setting this replaces the default list.
+    /// More columns never sent to or accepted from the UI. Columns whose name
+    /// contains `password`, `secret`, `token`, `api_key` or `salt` are always
+    /// hidden as well, unless listed in [`show_fields`](Self::show_fields).
     #[must_use]
     pub fn hidden_fields(mut self, fields: impl IntoIterator<Item = impl Into<String>>) -> Self {
-        self.hidden_fields = Some(names(fields));
+        self.hidden_fields = names(fields);
+        self
+    }
+
+    /// Columns to show although their name looks sensitive (see
+    /// [`hidden_fields`](Self::hidden_fields)), such as `prompt_tokens`.
+    #[must_use]
+    pub fn show_fields(mut self, fields: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.show_fields = names(fields);
         self
     }
 
@@ -201,7 +211,10 @@ impl<E: EntityTrait> ModelAdmin<E> {
     }
 
     /// Add a bulk action run on the selected records. The returned message
-    /// is shown to the user; an error is shown as a failure.
+    /// is shown to the user. To fail with a message of your own, return
+    /// `Error::BadRequest(message)`; database errors are reported as for the
+    /// admin's own writes, and any other error is logged and reported as an
+    /// internal error, without its details.
     #[must_use]
     pub fn action<F, Fut>(
         mut self,

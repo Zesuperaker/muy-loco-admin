@@ -120,7 +120,7 @@ test("reports duplicate values and hook validation errors", async ({ page }) => 
   await page.getByLabel("Name").fill("Duplicate");
   await page.getByLabel("Slug").fill("engineering");
   await page.getByRole("button", { name: "Create" }).click();
-  await expect(page.getByRole("alert")).toContainText("unique constraint violated");
+  await expect(page.getByRole("alert")).toContainText("a record with the same value already exists");
 
   await page.goto("/admin/models/articles/records/3");
   await page.getByLabel("Rating").fill("9");

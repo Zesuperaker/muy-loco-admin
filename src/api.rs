@@ -24,9 +24,9 @@ use serde::Deserialize;
 use serde_json::{Map, Value as JsonValue, json};
 
 use crate::{
-    auth::{Access, AdminAuth, AdminUser, LoginMethod, Operation},
+    auth::{AdminAuth, AdminUser, LoginMethod},
     error::{AdminError, AdminResult},
-    meta::{Capabilities, ModelMeta},
+    meta::ModelMeta,
     query::{ListParams, MAX_PER_PAGE},
     resource::{CsvStream, Record, Resource},
     session,
@@ -62,26 +62,29 @@ pub(crate) struct Inner {
 #[derive(Clone)]
 pub(crate) struct AdminState(pub Arc<Inner>);
 
+/// An operation on a model.
+#[derive(Clone, Copy)]
+enum Operation<'a> {
+    /// List, view and look up records.
+    View,
+    Create,
+    Update,
+    Delete,
+    /// Download records as CSV.
+    Export,
+    /// Run the named custom action.
+    Action(&'a str),
+}
+
 impl AdminState {
     fn model(&self, name: &str) -> Option<&Model> {
         self.0.models.iter().find(|m| m.meta.name == name)
     }
 
-    /// Resolve `name`, checking the user may perform `operation` on it.
-    /// Models the user cannot view are reported as missing.
-    fn authorize(
-        &self,
-        user: &AdminUser,
-        name: &str,
-        operation: Operation<'_>,
-    ) -> AdminResult<&Model> {
+    /// Resolve `name`, checking that its [`ModelAdmin`](crate::ModelAdmin)
+    /// allows `operation`. Every signed-in admin user may do the same.
+    fn authorize(&self, name: &str, operation: Operation<'_>) -> AdminResult<&Model> {
         let model = self.model(name).ok_or(AdminError::NotFound)?;
-        if !user.can(&Access {
-            model: name,
-            operation: Operation::View,
-        }) {
-            return Err(AdminError::NotFound);
-        }
         let caps = model.meta.capabilities;
         let capable = match operation {
             Operation::View => true,
@@ -96,23 +99,10 @@ impl AdminState {
                 true
             }
         };
-        if !capable
-            || !user.can(&Access {
-                model: name,
-                operation,
-            })
-        {
+        if !capable {
             return Err(AdminError::Forbidden);
         }
         Ok(model)
-    }
-
-    fn can_view(&self, user: &AdminUser, name: &str) -> bool {
-        self.model(name).is_some()
-            && user.can(&Access {
-                model: name,
-                operation: Operation::View,
-            })
     }
 }
 
@@ -147,7 +137,9 @@ async fn guard(request: Request, next: Next) -> Response {
     }
 }
 
-/// The authenticated admin user of a request.
+/// The authenticated admin user of a request. Every handler but `config`
+/// and `sign_out` takes it, so they refuse requests that fail to
+/// authenticate.
 pub(crate) struct Authed(pub AdminUser);
 
 impl FromRequestParts<AdminState> for Authed {
@@ -270,59 +262,16 @@ async fn sign_out(LocoSession(session): LocoSession) -> Response {
     }
 }
 
-fn user_meta(state: &AdminState, user: &AdminUser, meta: &ModelMeta) -> ModelMeta {
-    let mut meta = meta.clone();
-    let name = meta.name.clone();
-    let can = |operation: Operation<'_>| {
-        user.can(&Access {
-            model: &name,
-            operation,
-        })
-    };
-    let caps = meta.capabilities;
-    meta.capabilities = Capabilities {
-        view: true,
-        create: caps.create && can(Operation::Create),
-        update: caps.update && can(Operation::Update),
-        delete: caps.delete && can(Operation::Delete),
-        export: caps.export && can(Operation::Export),
-    };
-    meta.actions.retain(|a| can(Operation::Action(&a.name)));
-    meta.related.retain(|r| state.can_view(user, &r.model));
-    for field in &mut meta.fields {
-        if let Some(rel) = &mut field.relation
-            && rel
-                .model
-                .as_deref()
-                .is_some_and(|m| !state.can_view(user, m))
-        {
-            rel.model = None;
-        }
-    }
-    meta
-}
-
-async fn schema(State(state): State<AdminState>, Authed(user): Authed) -> Json<JsonValue> {
-    let models: Vec<ModelMeta> = state
-        .0
-        .models
-        .iter()
-        .filter(|m| state.can_view(&user, &m.meta.name))
-        .map(|m| user_meta(&state, &user, &m.meta))
-        .collect();
+async fn schema(State(state): State<AdminState>, _: Authed) -> Json<JsonValue> {
+    let models: Vec<&ModelMeta> = state.0.models.iter().map(|m| &m.meta).collect();
     Json(json!({ "models": models }))
 }
 
-async fn stats(
-    State(state): State<AdminState>,
-    Authed(user): Authed,
-) -> AdminResult<Json<JsonValue>> {
+async fn stats(State(state): State<AdminState>, _: Authed) -> AdminResult<Json<JsonValue>> {
     let mut counts = BTreeMap::new();
     for model in &state.0.models {
-        if state.can_view(&user, &model.meta.name) {
-            let count = model.resource.count(&state.0.ctx.db).await?;
-            counts.insert(model.meta.name.clone(), count);
-        }
+        let count = model.resource.count(&state.0.ctx.db).await?;
+        counts.insert(model.meta.name.clone(), count);
     }
     Ok(Json(json!({ "counts": counts })))
 }
@@ -331,7 +280,6 @@ async fn stats(
 /// field name, then by the foreign-key value as text.
 async fn fk_labels(
     state: &AdminState,
-    user: &AdminUser,
     model: &Model,
     records: &[&Record],
 ) -> AdminResult<BTreeMap<String, BTreeMap<String, String>>> {
@@ -341,9 +289,6 @@ async fn fk_labels(
         let Some(target_name) = rel.model.as_deref() else {
             continue;
         };
-        if !state.can_view(user, target_name) {
-            continue;
-        }
         let Some(target) = state.model(target_name) else {
             continue;
         };
@@ -366,15 +311,15 @@ async fn fk_labels(
 
 async fn list(
     State(state): State<AdminState>,
-    Authed(user): Authed,
+    _: Authed,
     Path(name): Path<String>,
     Query(query): Query<HashMap<String, String>>,
 ) -> AdminResult<Json<JsonValue>> {
-    let model = state.authorize(&user, &name, Operation::View)?;
+    let model = state.authorize(&name, Operation::View)?;
     let params = ListParams::from_query(&query)?;
     let page = model.resource.list(&state.0.ctx.db, &params).await?;
     let records: Vec<&Record> = page.records.iter().collect();
-    let labels = fk_labels(&state, &user, model, &records).await?;
+    let labels = fk_labels(&state, model, &records).await?;
     let mut out = serde_json::to_value(&page).map_err(|e| AdminError::Internal(e.to_string()))?;
     out["labels"] = json!(labels);
     Ok(Json(out))
@@ -382,67 +327,66 @@ async fn list(
 
 async fn record_response(
     state: &AdminState,
-    user: &AdminUser,
     model: &Model,
     record: &Record,
 ) -> AdminResult<Json<JsonValue>> {
-    let labels = fk_labels(state, user, model, &[record]).await?;
+    let labels = fk_labels(state, model, &[record]).await?;
     Ok(Json(json!({ "record": record, "labels": labels })))
 }
 
 async fn show(
     State(state): State<AdminState>,
-    Authed(user): Authed,
+    _: Authed,
     Path((name, key)): Path<(String, String)>,
 ) -> AdminResult<Json<JsonValue>> {
-    let model = state.authorize(&user, &name, Operation::View)?;
+    let model = state.authorize(&name, Operation::View)?;
     let record = model.resource.get(&state.0.ctx.db, &key).await?;
-    record_response(&state, &user, model, &record).await
+    record_response(&state, model, &record).await
 }
 
 async fn create(
     State(state): State<AdminState>,
-    Authed(user): Authed,
+    _: Authed,
     Path(name): Path<String>,
     input: Result<Json<Map<String, JsonValue>>, JsonRejection>,
 ) -> AdminResult<Response> {
-    let model = state.authorize(&user, &name, Operation::Create)?;
+    let model = state.authorize(&name, Operation::Create)?;
     let record = model.resource.create(&state.0.ctx.db, body(input)?).await?;
-    let json = record_response(&state, &user, model, &record).await?;
+    let json = record_response(&state, model, &record).await?;
     Ok((StatusCode::CREATED, json).into_response())
 }
 
 async fn update(
     State(state): State<AdminState>,
-    Authed(user): Authed,
+    _: Authed,
     Path((name, key)): Path<(String, String)>,
     input: Result<Json<Map<String, JsonValue>>, JsonRejection>,
 ) -> AdminResult<Json<JsonValue>> {
-    let model = state.authorize(&user, &name, Operation::Update)?;
+    let model = state.authorize(&name, Operation::Update)?;
     let record = model
         .resource
         .update(&state.0.ctx.db, &key, body(input)?)
         .await?;
-    record_response(&state, &user, model, &record).await
+    record_response(&state, model, &record).await
 }
 
 async fn destroy(
     State(state): State<AdminState>,
-    Authed(user): Authed,
+    _: Authed,
     Path((name, key)): Path<(String, String)>,
 ) -> AdminResult<Json<JsonValue>> {
-    let model = state.authorize(&user, &name, Operation::Delete)?;
+    let model = state.authorize(&name, Operation::Delete)?;
     let deleted = model.resource.delete(&state.0.ctx.db, &[key]).await?;
     Ok(Json(json!({ "deleted": deleted })))
 }
 
 async fn bulk_delete(
     State(state): State<AdminState>,
-    Authed(user): Authed,
+    _: Authed,
     Path(name): Path<String>,
     input: Result<Json<KeysBody>, JsonRejection>,
 ) -> AdminResult<Json<JsonValue>> {
-    let model = state.authorize(&user, &name, Operation::Delete)?;
+    let model = state.authorize(&name, Operation::Delete)?;
     let deleted = model
         .resource
         .delete(&state.0.ctx.db, &keys(input)?)
@@ -452,11 +396,11 @@ async fn bulk_delete(
 
 async fn run_action(
     State(state): State<AdminState>,
-    Authed(user): Authed,
+    _: Authed,
     Path((name, action)): Path<(String, String)>,
     input: Result<Json<KeysBody>, JsonRejection>,
 ) -> AdminResult<Json<JsonValue>> {
-    let model = state.authorize(&user, &name, Operation::Action(&action))?;
+    let model = state.authorize(&name, Operation::Action(&action))?;
     let message = model
         .resource
         .run_action(&state.0.ctx, &action, &keys(input)?)
@@ -466,11 +410,11 @@ async fn run_action(
 
 async fn export(
     State(state): State<AdminState>,
-    Authed(user): Authed,
+    _: Authed,
     Path(name): Path<String>,
     Query(query): Query<HashMap<String, String>>,
 ) -> AdminResult<Response> {
-    let model = state.authorize(&user, &name, Operation::Export)?;
+    let model = state.authorize(&name, Operation::Export)?;
     let params = ListParams::from_query(&query)?;
     let idle = state.0.export_idle_timeout;
     let csv = Arc::clone(&model.resource)
@@ -550,11 +494,11 @@ pub(crate) struct LookupQuery {
 
 async fn lookup(
     State(state): State<AdminState>,
-    Authed(user): Authed,
+    _: Authed,
     Path(name): Path<String>,
     Query(query): Query<LookupQuery>,
 ) -> AdminResult<Json<JsonValue>> {
-    let model = state.authorize(&user, &name, Operation::View)?;
+    let model = state.authorize(&name, Operation::View)?;
     let limit = query
         .limit
         .unwrap_or(LOOKUP_LIMIT)

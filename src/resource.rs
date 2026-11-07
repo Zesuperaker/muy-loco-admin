@@ -136,7 +136,6 @@ struct Column<E: EntityTrait> {
 pub(crate) struct ModelResource<E: EntityTrait> {
     meta: ModelMeta,
     columns: Vec<Column<E>>,
-    hidden: HashSet<String>,
     pk: Vec<E::Column>,
     search: Vec<usize>,
     display: Option<E::Column>,
@@ -156,6 +155,48 @@ fn single_column(identity: &sea_orm::Identity) -> Option<String> {
         sea_orm::Identity::Unary(col) => Some(col.to_string()),
         _ => None,
     }
+}
+
+/// Whether a column name looks like it holds a credential.
+fn is_sensitive(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    SENSITIVE.iter().any(|s| lower.contains(s))
+}
+
+/// Spellings of `q` to look for in `lower(column)`. SQLite's `lower()`, and
+/// Postgres's under the `C` locale, only lowercase ASCII, so non-ASCII
+/// letters keep their stored case: `q` is tried as typed and in lower, upper
+/// and title case, with ASCII lowercased like `lower()` does.
+fn search_terms(q: &str) -> Vec<String> {
+    let mut word_start = true;
+    let title: String = q
+        .chars()
+        .flat_map(|c| {
+            let cased: Vec<char> = if word_start {
+                c.to_uppercase().collect()
+            } else {
+                c.to_lowercase().collect()
+            };
+            word_start = !c.is_alphanumeric();
+            cased
+        })
+        .collect();
+    let mut terms: Vec<String> = [q.to_string(), q.to_lowercase(), q.to_uppercase(), title]
+        .iter()
+        .map(|term| term.to_ascii_lowercase())
+        .collect();
+    terms.sort();
+    terms.dedup();
+    terms
+}
+
+/// `lower(column)` as text, for case-insensitive `LIKE`.
+fn lowered<E: EntityTrait>(column: &Column<E>) -> Expr {
+    let mut expr = Expr::col((E::default(), column.col));
+    if !column.kind.is_textual() {
+        expr = expr.cast_as(Alias::new("text"));
+    }
+    Expr::expr(Func::lower(expr))
 }
 
 fn escape_like(input: &str) -> String {
@@ -270,23 +311,33 @@ where
             Ok(())
         };
 
-        let hidden: HashSet<String> = match &config.hidden_fields {
-            Some(list) => {
-                check("hidden_fields", list)?;
-                list.iter().cloned().collect()
-            }
-            None => all_names
-                .iter()
-                .filter(|n| {
-                    let lower = n.to_ascii_lowercase();
-                    SENSITIVE.iter().any(|s| lower.contains(s))
-                })
-                .cloned()
-                .collect(),
-        };
-        if let Some(key) = pk_names.iter().find(|k| hidden.contains(*k)) {
+        // Sensitive-looking columns stay hidden whatever `hidden_fields` lists;
+        // only `show_fields` reveals one.
+        check("hidden_fields", &config.hidden_fields)?;
+        check("show_fields", &config.show_fields)?;
+        if let Some(field) = config
+            .hidden_fields
+            .iter()
+            .find(|f| config.show_fields.contains(*f))
+        {
             return Err(format!(
-                "model `{name}`: primary key `{key}` cannot be hidden"
+                "model `{name}`: field `{field}` is in both hidden_fields and show_fields"
+            ));
+        }
+        let hidden: HashSet<String> = all_names
+            .iter()
+            .filter(|n| is_sensitive(n) && !config.show_fields.contains(*n))
+            .chain(&config.hidden_fields)
+            .cloned()
+            .collect();
+        if let Some(key) = pk_names.iter().find(|k| hidden.contains(*k)) {
+            let hint = if config.hidden_fields.contains(key) {
+                ""
+            } else {
+                " (its name looks sensitive; list it in show_fields to show it)"
+            };
+            return Err(format!(
+                "model `{name}`: primary key `{key}` cannot be hidden{hint}"
             ));
         }
         let readonly: HashSet<String> = match &config.readonly_fields {
@@ -391,6 +442,15 @@ where
         let list_filter = match config.list_filter {
             Some(list) => {
                 visible("list_filter", &list)?;
+                if let Some(field) = list.iter().find(|name| {
+                    fields
+                        .iter()
+                        .any(|f| &f.name == *name && f.kind == FieldKind::Json)
+                }) {
+                    return Err(format!(
+                        "model `{name}`: JSON field `{field}` cannot be used in list_filter"
+                    ));
+                }
                 list
             }
             None => fields
@@ -476,7 +536,6 @@ where
         Ok(Self {
             meta,
             columns,
-            hidden,
             pk,
             search,
             display,
@@ -544,23 +603,16 @@ where
         if let Some(q) = &params.q
             && !self.search.is_empty()
         {
-            let pattern = format!("%{}%", escape_like(&q.to_lowercase()));
-            let mut any = Condition::any();
-            for idx in &self.search {
-                let column = &self.columns[*idx];
-                let mut expr = Expr::col((E::default(), column.col));
-                if !column.kind.is_textual() {
-                    expr = expr.cast_as(Alias::new("text"));
-                }
-                any = any.add(
-                    Expr::expr(Func::lower(expr)).like(LikeExpr::new(pattern.clone()).escape('\\')),
-                );
-            }
-            cond = cond.add(any);
+            cond = cond.add(self.search_condition(q));
         }
         let mut errors = FieldErrors::new();
         for (field, raw) in &params.filters {
             let column = self.column(field)?;
+            if column.kind == FieldKind::Json {
+                return Err(AdminError::bad_request(format!(
+                    "cannot filter by the JSON field `{field}`"
+                )));
+            }
             match raw.as_str() {
                 NULL_FILTER => cond = cond.add(column.col.is_null()),
                 NOT_NULL_FILTER => cond = cond.add(column.col.is_not_null()),
@@ -582,16 +634,43 @@ where
         Ok(E::find().filter(cond))
     }
 
+    /// Records whose search fields contain `q`, ignoring case.
+    fn search_condition(&self, q: &str) -> Condition {
+        let mut any = Condition::any();
+        for term in search_terms(q) {
+            let pattern = format!("%{}%", escape_like(&term));
+            for idx in &self.search {
+                any = any.add(
+                    lowered(&self.columns[*idx]).like(LikeExpr::new(pattern.clone()).escape('\\')),
+                );
+            }
+        }
+        any
+    }
+
     fn ordered(&self, params: &ListParams) -> AdminResult<Select<E>> {
         let (col, default_dir) = match &params.sort {
             Some(field) => (self.column(field)?.col, SortDirection::Asc),
             None => self.order,
         };
+        let json = self
+            .columns
+            .iter()
+            .any(|c| c.col.as_str() == col.as_str() && c.kind == FieldKind::Json);
         let order = match params.order.unwrap_or(default_dir) {
             SortDirection::Asc => Order::Asc,
             SortDirection::Desc => Order::Desc,
         };
-        let mut query = self.query(params)?.order_by(col, order.clone());
+        let query = self.query(params)?;
+        // Postgres's `json` type has no ordering; its text form does.
+        let mut query = if json {
+            query.order_by(
+                Expr::col((E::default(), col)).cast_as(Alias::new("text")),
+                order.clone(),
+            )
+        } else {
+            query.order_by(col, order.clone())
+        };
         for pk in &self.pk {
             if pk.as_str() != col.as_str() {
                 query = query.order_by(*pk, order.clone());
@@ -609,13 +688,13 @@ where
         let mut errors = FieldErrors::new();
         let mut changed = false;
         for (name, value) in input {
+            // Hidden columns get the same answer as missing ones, so the reply
+            // does not reveal that they exist.
             let Some(column) = self.columns.iter().find(|c| c.name == name) else {
-                let msg = if self.hidden.contains(&name) {
-                    "is not editable"
-                } else {
-                    "is not a field of this model"
-                };
-                errors.entry(name).or_default().push(msg.to_string());
+                errors
+                    .entry(name)
+                    .or_default()
+                    .push("is not a field of this model".to_string());
                 continue;
             };
             if column.readonly || (current.is_some() && column.primary_key) {
@@ -632,7 +711,13 @@ where
                     }
                     match am.try_set(column.col, value) {
                         Ok(()) => changed = true,
-                        Err(err) => errors.entry(name).or_default().push(err.to_string()),
+                        Err(err) => {
+                            tracing::info!(field = %name, error = %err, "admin field rejected");
+                            errors
+                                .entry(name)
+                                .or_default()
+                                .push("has an invalid value".to_string());
+                        }
                     }
                 }
                 Err(msg) => errors.entry(name).or_default().push(msg),
@@ -713,13 +798,14 @@ where
 
     async fn list(&self, db: &DatabaseConnection, params: &ListParams) -> AdminResult<Page> {
         let per_page = params.per_page.unwrap_or(self.meta.per_page);
+        // Databases take a signed 64-bit offset.
+        let offset = (params.page - 1)
+            .checked_mul(per_page)
+            .filter(|offset| i64::try_from(*offset).is_ok())
+            .ok_or_else(|| AdminError::bad_request("`page` is too large"))?;
         let query = self.ordered(params)?;
         let total = self.query(params)?.count(db).await?;
-        let models = query
-            .offset((params.page - 1).saturating_mul(per_page))
-            .limit(per_page)
-            .all(db)
-            .await?;
+        let models = query.offset(offset).limit(per_page).all(db).await?;
         Ok(Page {
             records: models.iter().map(|m| self.record(m)).collect(),
             total,
@@ -796,17 +882,30 @@ where
         limit: u64,
     ) -> AdminResult<Vec<Choice>> {
         let value_col = match column {
-            Some(name) => self.column(name)?.col,
-            None => self.pk[0],
+            Some(name) => self.column(name)?,
+            None => self
+                .columns
+                .iter()
+                .find(|c| c.col.as_str() == self.pk[0].as_str())
+                .ok_or(AdminError::NotFound)?,
         };
         let params = ListParams {
             page: 1,
-            q: q.map(str::trim)
-                .filter(|q| !q.is_empty())
-                .map(ToString::to_string),
             ..ListParams::default()
         };
-        let models = self.ordered(&params)?.limit(limit).all(db).await?;
+        let mut select = self.ordered(&params)?;
+        if let Some(q) = q.map(str::trim).filter(|q| !q.is_empty()) {
+            // The search fields contain `q`, or the picked value (usually
+            // the key) starts with it, so records without text fields can be
+            // found too.
+            let prefix = format!("{}%", escape_like(&q.to_lowercase()));
+            select = select.filter(
+                self.search_condition(q)
+                    .add(lowered(value_col).like(LikeExpr::new(prefix).escape('\\'))),
+            );
+        }
+        let value_col = value_col.col;
+        let models = select.limit(limit).all(db).await?;
         Ok(models
             .iter()
             .map(|m| {
@@ -862,10 +961,23 @@ where
         }
         (action.handler)(ctx.clone(), models)
             .await
-            .map_err(|err| AdminError::Validation {
-                message: err.to_string(),
-                fields: FieldErrors::new(),
-            })
+            .map_err(|err| action_error(name, err))
+    }
+}
+
+/// What the client learns of a failed action, following Loco's own rule for
+/// controllers: a `BadRequest` message is meant for the user, other errors are
+/// logged and reported as internal. Database errors read as they do for the
+/// admin's own writes, so hook and validation messages still show.
+fn action_error(action: &str, err: loco_rs::Error) -> AdminError {
+    match err {
+        loco_rs::Error::BadRequest(message) => AdminError::Validation {
+            message,
+            fields: FieldErrors::new(),
+        },
+        loco_rs::Error::WithBacktrace { inner, .. } => action_error(action, *inner),
+        loco_rs::Error::DB(err) => AdminError::from(err),
+        other => AdminError::Internal(format!("action `{action}` failed: {other}")),
     }
 }
 

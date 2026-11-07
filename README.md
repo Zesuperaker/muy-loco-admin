@@ -24,7 +24,7 @@ Add the crate:
 <!-- x-release-please-start-version -->
 ```toml
 [dependencies]
-muy-loco-admin = "0.1.0"
+muy-loco-admin = "0.0.1"
 ```
 <!-- x-release-please-end -->
 
@@ -103,7 +103,8 @@ app does not use Loco's JWT auth, implement `AdminAuth` (see [Authentication](#a
 | `search_fields` | text columns |
 | `list_filter` | boolean, enum and foreign-key columns |
 | `readonly_fields` | `created_at`, `updated_at` (auto-increment keys are always read-only) |
-| `hidden_fields` | columns containing `password`, `secret`, `token`, `api_key` or `salt` |
+| `hidden_fields` | none; columns containing `password`, `secret`, `token`, `api_key` or `salt` are always hidden too |
+| `show_fields` | none; shows such a column anyway (e.g. `prompt_tokens`) |
 | `ordering` | primary key, descending |
 | `per_page` | 25 (max 500) |
 | `display_field` | first of `name`, `title`, `label`, `email`, `username`, `slug`, `code`; linked in the list |
@@ -114,12 +115,13 @@ app does not use Loco's JWT auth, implement `AdminAuth` (see [Authentication](#a
 
 - `JwtAuth<U: Authenticable>` uses Loco's `auth.jwt` config. The UI trades the token from the
   login form for a [session](#sessions) cookie and never stores it. Scripts can send a token
-  instead, as `Authorization: Bearer` or from `auth.jwt.location`. Restrict operations per model
-  with `.permissions(|user, access| ...)`.
-- `AllowAll` allows anonymous access in the `development` and `test` environments only; every
-  other environment (`production`, `staging`, ...) is refused.
-- For anything else, implement `AdminAuth` and return
-  `AdminUser::new(id, name).with_policy(...)`.
+  instead, as `Authorization: Bearer` or from `auth.jwt.location`.
+- `AllowAll` lets anyone in, for local development: it runs only in a debug build in the
+  `development` or `test` environment, and logs a warning when mounted. Anywhere else, including
+  any release build, the admin refuses to start.
+- For anything else, implement `AdminAuth` and return `AdminUser::new(id, name)`.
+
+Every admin user may do everything; what can be done to each model is set with `ModelAdmin`.
 
 API requests made by pages on other sites are refused (`Sec-Fetch-Site`), and mutating requests
 must send `X-Requested-With: muy-loco-admin`; the UI does both.
@@ -128,7 +130,16 @@ must send `X-Requested-With: muy-loco-admin`; the UI does both.
 
 The login form signs users in with Loco's session (`auth.session`): an `HttpOnly`,
 `SameSite=Lax` cookie, `Secure` when `server.host` is `https://`. The app shares it, so signing in
-or out of the admin does the same in the app; the user id is the user's `pid`. For production:
+or out of the admin does the same in the app. Two things follow:
+
+- The admin reads the session's user id as the user's `pid`, so every `Session::set_user_id` in
+  your app, OAuth's `on_sign_in` included, must pass the `pid`. Any other id, such as a username,
+  could sign someone in as the user whose `pid` it happens to match.
+- Every way your app signs users in (password, OAuth, magic links, remember-me) also signs admin
+  users into the admin. The `JwtAuth::new` check, such as `user.is_admin`, still runs on every
+  request.
+
+For production:
 
 ```yaml
 auth:
@@ -139,9 +150,16 @@ auth:
 ```
 
 With the default `cookie` store a copied cookie keeps working until `max_age`, even after
-sign-out. The admin refuses to mount when the login form could not work: no secret outside
-development and test, a `__Host-` or `__Secure-` cookie without `Secure`, or a server-side store
-without Loco's `auth_session` middleware.
+sign-out or a password change. With a server-side store, also end a user's sessions wherever your
+app changes a password:
+
+```rust
+loco_rs::auth::session_store::sign_out_everywhere(&ctx, &user.pid.to_string()).await?;
+```
+
+The admin refuses to mount when the login form could not work: no secret outside development and
+test, a `__Host-` or `__Secure-` cookie without `Secure`, or a server-side store without Loco's
+`auth_session` middleware.
 
 ## Middleware
 
@@ -190,7 +208,7 @@ cd dogfood/e2e && npm ci && npx playwright install chromium && npm test
 Commit messages and PR titles follow [Conventional Commits](https://www.conventionalcommits.org),
 and branches are named `<type>/<topic>` (`feat/site-link`). After CI passes on `main`, release-please keeps a release PR up to date with the next version and
 changelog; merging it tags the release and publishes the crate to crates.io. Below 1.0, `fix:`
-and `feat:` bump the patch version and breaking changes (`feat!:`) the minor.
+bumps the patch version, and `feat:` and breaking changes (`feat!:`) the minor.
 
 Dogfood logins (password `12341234`): `user1@example.com` (admin), `user2@example.com`
 (no admin access). The database is reseeded on every start; set `SEED_ON_START=false` to keep

@@ -34,6 +34,7 @@ pub(crate) async fn load(ctx: &AppContext, parts: &Parts) -> loco_rs::Result<Opt
 }
 
 /// The user id the request's session was signed in with.
+#[cfg(feature = "jwt")]
 pub(crate) async fn user_id(ctx: &AppContext, parts: &Parts) -> loco_rs::Result<Option<String>> {
     Ok(load(ctx, parts)
         .await?

@@ -7,8 +7,8 @@ use common::{
 };
 use loco_rs::{app::AppContext, auth::jwt::JWT, environment::Environment};
 use muy_loco_admin::{
-    Access, Admin, AdminAuth, AdminUser, AllowAll, AuthError, FormLogin, LoginMethod, ModelAdmin,
-    Operation, auth::JwtAuth,
+    Admin, AdminAuth, AdminUser, AllowAll, AuthError, FormLogin, LoginMethod, ModelAdmin,
+    auth::JwtAuth,
 };
 use serde_json::{Map, json};
 
@@ -20,11 +20,7 @@ fn token(pid: &str) -> String {
 
 fn jwt_admin() -> Admin {
     Admin::new(
-        JwtAuth::<users::Model>::new(|user| user.is_admin)
-            .display_name(|user| user.email.clone())
-            .permissions(|user, access| {
-                user.email.starts_with("root") || access.operation == Operation::View
-            }),
+        JwtAuth::<users::Model>::new(|user| user.is_admin).display_name(|user| user.email.clone()),
     )
     .model::<users::Entity>()
     .register(
@@ -71,52 +67,32 @@ async fn jwt_auth_flow() {
         json!({"id": staff.pid.to_string(), "name": "staff@example.com"})
     );
 
-    let root = create_user(&db.db, "root@example.com", true).await;
-    let root_client = anonymous.with_token(token(&root.pid.to_string()));
-    let post = create_post(&db.db, root.id, "p").await;
-
-    // Staff may only view.
+    // Every admin user may do everything the models allow.
+    let post = create_post(&db.db, staff.id, "p").await;
     let schema = staff_client.get("/api/schema").await.json();
-    let caps = &schema["models"][1]["capabilities"];
     assert_eq!(
-        caps,
-        &json!({"view": true, "create": false, "update": false, "delete": false, "export": false})
+        schema["models"][1]["capabilities"],
+        json!({"view": true, "create": true, "update": true, "delete": true, "export": true})
     );
-    assert_eq!(schema["models"][1]["actions"], json!([]));
-    assert_eq!(
-        staff_client.get("/api/models/posts/records").await.status,
-        200
-    );
+    assert_eq!(schema["models"][1]["actions"][0]["name"], "noop");
     let res = staff_client
         .patch(
             &format!("/api/models/posts/records/{}", post.id),
             json!({"title": "x"}),
         )
         .await;
-    assert_eq!(res.status, 403);
+    assert_eq!(res.status, 200, "{}", res.text());
     let res = staff_client
         .post(
             "/api/models/posts/actions/noop",
             json!({"keys": [post.id.to_string()]}),
         )
         .await;
-    assert_eq!(res.status, 403);
+    assert_eq!(res.json()["message"], "done");
     assert_eq!(
         staff_client.get("/api/models/posts/export").await.status,
-        403
+        200
     );
-
-    // Root may do everything.
-    let schema = root_client.get("/api/schema").await.json();
-    assert_eq!(schema["models"][1]["capabilities"]["delete"], true);
-    assert_eq!(schema["models"][1]["actions"][0]["name"], "noop");
-    let res = root_client
-        .post(
-            "/api/models/posts/actions/noop",
-            json!({"keys": [post.id.to_string()]}),
-        )
-        .await;
-    assert_eq!(res.json()["message"], "done");
 }
 
 #[tokio::test]
@@ -221,37 +197,63 @@ async fn login_endpoint_moves_the_login_form() {
 }
 
 #[tokio::test]
-async fn allow_all_only_opens_development_and_test() {
+async fn allow_all_only_mounts_in_development_and_test() {
     let test_db = database().await;
-    for (env, status) in [
-        (Environment::Development, 200),
-        (Environment::Test, 200),
-        (Environment::Production, 403),
-        (Environment::Any("staging".into()), 403),
-        (Environment::Any("prod".into()), 403),
-    ] {
+    for env in [Environment::Development, Environment::Test] {
         let ctx = context(&test_db, env.clone(), &json!({}));
         let router = Admin::new(AllowAll)
             .model::<users::Entity>()
             .router(&ctx)
             .unwrap();
         let res = Client::new(router).get("/api/me").await;
-        assert_eq!(res.status, status, "{env:?}");
+        assert_eq!(res.status, 200, "{env:?}");
+    }
+    for env in [
+        Environment::Production,
+        Environment::Any("staging".into()),
+        Environment::Any("prod".into()),
+    ] {
+        let ctx = context(&test_db, env.clone(), &json!({}));
+        let err = Admin::new(AllowAll)
+            .model::<users::Entity>()
+            .router(&ctx)
+            .expect_err("refuses to mount")
+            .to_string();
+        assert!(err.contains("AllowAll"), "{env:?}: {err}");
+        assert!(err.contains(&format!("`{env}`")), "{env:?}: {err}");
     }
 }
 
-/// A custom auth reading a header, with per-model rules.
+/// Auth that delegates to `AllowAll` but not its mount check.
+struct Wrapped;
+
+#[async_trait]
+impl AdminAuth for Wrapped {
+    async fn authenticate(&self, ctx: &AppContext, parts: &Parts) -> Result<AdminUser, AuthError> {
+        AllowAll.authenticate(ctx, parts).await
+    }
+}
+
+#[tokio::test]
+async fn allow_all_still_refuses_requests_where_it_cannot_mount() {
+    let test_db = database().await;
+    let ctx = context(&test_db, Environment::Production, &json!({}));
+    let router = Admin::new(Wrapped)
+        .model::<users::Entity>()
+        .router(&ctx)
+        .unwrap();
+    let res = Client::new(router).get("/api/me").await;
+    assert_eq!(res.status, 403);
+}
+
+/// A custom auth reading a header.
 struct HeaderAuth;
 
 #[async_trait]
 impl AdminAuth for HeaderAuth {
     async fn authenticate(&self, _ctx: &AppContext, parts: &Parts) -> Result<AdminUser, AuthError> {
         match parts.headers.get("x-role").and_then(|v| v.to_str().ok()) {
-            Some("editor") => Ok(AdminUser::new("1", "Editor").with_policy(
-                |access: &Access<'_>| {
-                    access.model == "posts" && access.operation != Operation::Delete
-                },
-            )),
+            Some("editor") => Ok(AdminUser::new("1", "Editor")),
             Some("broken") => Err(AuthError::Internal("auth backend down".into())),
             Some(_) => Err(AuthError::Forbidden),
             None => Err(AuthError::Unauthenticated),
@@ -269,7 +271,7 @@ impl AdminAuth for HeaderAuth {
 }
 
 #[tokio::test]
-async fn custom_auth_and_policies() {
+async fn custom_auth() {
     let (db, ctx) = setup().await;
     let router = Admin::new(HeaderAuth)
         .model::<users::Entity>()
@@ -304,40 +306,35 @@ async fn custom_auth_and_policies() {
 
     let schema = editor(Method::GET, "/api/schema".into()).await.json();
     let models = schema["models"].as_array().unwrap();
-    assert_eq!(models.len(), 1, "users are invisible to editors");
-    assert_eq!(models[0]["name"], "posts");
-    assert_eq!(models[0]["capabilities"]["delete"], false);
-    assert_eq!(models[0]["capabilities"]["update"], true);
+    assert_eq!(models.len(), 2);
     assert_eq!(
-        models[0]["fields"]
+        models[1]["fields"]
             .as_array()
             .unwrap()
             .iter()
             .find(|f| f["name"] == "user_id")
             .unwrap()["relation"]["model"],
-        serde_json::Value::Null,
-        "links to invisible models are dropped"
+        "users"
     );
 
     let stats = editor(Method::GET, "/api/stats".into()).await.json();
-    assert_eq!(stats["counts"], json!({"posts": 1}));
+    assert_eq!(stats["counts"], json!({"posts": 1, "users": 1}));
     let list = editor(Method::GET, "/api/models/posts/records".into())
         .await
         .json();
-    assert_eq!(list["labels"], json!({}), "no labels from invisible models");
-    assert_eq!(
-        editor(Method::GET, "/api/models/users/records".into())
-            .await
-            .status,
-        404
-    );
+    assert_eq!(list["labels"]["user_id"][ann.id.to_string()], "ann");
     let res = client
         .send_raw(
             Method::DELETE,
             &format!("/api/models/posts/records/{}", post.id),
             None,
-            vec![("x-role", "editor")],
+            vec![("x-role", "editor"), ("x-requested-with", "muy-loco-admin")],
         )
         .await;
-    assert_eq!(res.status, 403);
+    assert_eq!(res.status, 200, "{}", res.text());
+    assert_eq!(
+        client.get("/api/stats").await.status,
+        401,
+        "no header, no access"
+    );
 }

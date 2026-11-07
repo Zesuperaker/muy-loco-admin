@@ -85,8 +85,10 @@ export function FieldInput({
         />
       );
     case "integer":
+      // Text, not `type="number"`: number inputs hold a double, which rounds
+      // integers beyond 2^53. `fromInput` checks the digits.
       return (
-        <input {...common} type="number" step={1} value={value} onChange={(e) => onChange(e.target.value)} />
+        <input {...common} inputMode="numeric" value={value} onChange={(e) => onChange(e.target.value)} />
       );
     case "float":
       return (

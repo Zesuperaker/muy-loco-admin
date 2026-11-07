@@ -1,3 +1,4 @@
+import { parseJson } from "./json";
 import type {
   AdminConfig,
   AdminRecord,
@@ -76,7 +77,7 @@ export async function request(path: string, init: RequestInit = {}): Promise<Res
 
 async function json<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await request(path, init);
-  return (await res.json()) as T;
+  return parseJson(await res.text()) as T;
 }
 
 function send<T>(method: string, path: string, body: unknown): Promise<T> {

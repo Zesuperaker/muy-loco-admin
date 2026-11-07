@@ -3,7 +3,7 @@ mod common;
 use axum::http::Method;
 use common::{Client, JWT_SECRET, Res, TestDb, context, create_user, database, setup, users};
 use loco_rs::{auth::jwt::JWT, environment::Environment};
-use muy_loco_admin::{Admin, AllowAll, LoginMethod, auth::JwtAuth};
+use muy_loco_admin::{Admin, LoginMethod, auth::JwtAuth};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, sea_query::Expr};
 use serde_json::{Map, Value, json};
 
@@ -270,7 +270,7 @@ async fn mounting_checks_the_session_setup() {
         204
     );
     assert!(
-        Admin::new(AllowAll)
+        Admin::new(JwtAuth::<users::Model>::new(|_| true).login_method(LoginMethod::None))
             .model::<users::Entity>()
             .router(&ctx)
             .is_ok()

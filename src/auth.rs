@@ -1,10 +1,9 @@
-//! Authentication and authorization hooks.
+//! Authentication hooks.
 //!
 //! Every admin API request is authenticated through an [`AdminAuth`]
-//! implementation. The returned [`AdminUser`] then decides, per model and
-//! operation, what the user may do.
-
-use std::{fmt, sync::Arc};
+//! implementation. A user it lets in may use the whole admin: what can be
+//! done to each model is set per model with
+//! [`ModelAdmin`](crate::ModelAdmin), the same for every admin user.
 
 use async_trait::async_trait;
 use axum::http::request::Parts;
@@ -13,75 +12,22 @@ use serde::Serialize;
 
 use crate::error::AdminError;
 
-/// An operation on a model.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Operation<'a> {
-    /// List, view and look up records.
-    View,
-    Create,
-    Update,
-    Delete,
-    /// Download records as CSV.
-    Export,
-    /// Run the named custom action.
-    Action(&'a str),
-}
-
-/// An authorization request: may the user perform `operation` on `model`?
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Access<'a> {
-    /// The admin model name (the table name unless overridden).
-    pub model: &'a str,
-    pub operation: Operation<'a>,
-}
-
-type Policy = Arc<dyn Fn(&Access<'_>) -> bool + Send + Sync>;
-
 /// An authenticated admin user.
-#[derive(Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AdminUser {
     /// A stable identifier (for example the user's `pid`).
     pub id: String,
     /// The name shown in the UI.
     pub name: String,
-    policy: Option<Policy>,
 }
 
 impl AdminUser {
-    /// A user allowed to perform every operation.
     #[must_use]
     pub fn new(id: impl Into<String>, name: impl Into<String>) -> Self {
         Self {
             id: id.into(),
             name: name.into(),
-            policy: None,
         }
-    }
-
-    /// Restrict the user to operations for which `policy` returns `true`.
-    #[must_use]
-    pub fn with_policy(
-        mut self,
-        policy: impl Fn(&Access<'_>) -> bool + Send + Sync + 'static,
-    ) -> Self {
-        self.policy = Some(Arc::new(policy));
-        self
-    }
-
-    /// Whether the user may perform `access`.
-    #[must_use]
-    pub fn can(&self, access: &Access<'_>) -> bool {
-        self.policy.as_ref().is_none_or(|policy| policy(access))
-    }
-}
-
-impl fmt::Debug for AdminUser {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("AdminUser")
-            .field("id", &self.id)
-            .field("name", &self.name)
-            .field("policy", &self.policy.is_some())
-            .finish()
     }
 }
 
@@ -153,8 +99,8 @@ pub enum LoginMethod {
 
 /// Authenticates admin requests.
 ///
-/// Implement this to plug in any authentication scheme. The returned
-/// [`AdminUser`] carries the per-operation policy.
+/// Implement this to plug in any authentication scheme. Return an
+/// [`AdminUser`] only for users who may use the whole admin.
 #[async_trait]
 pub trait AdminAuth: Send + Sync + 'static {
     /// Authenticate the request described by `parts`.
@@ -164,26 +110,55 @@ pub trait AdminAuth: Send + Sync + 'static {
     fn login(&self) -> LoginMethod {
         LoginMethod::None
     }
+
+    /// Called once when the admin is mounted. An error stops the app from
+    /// starting, for auth that must not run where it is mounted.
+    fn check(&self, _ctx: &AppContext) -> loco_rs::Result<()> {
+        Ok(())
+    }
 }
 
 /// Lets every request in as an anonymous admin.
 ///
-/// Meant for local development and tests. Requests are refused (403) unless
-/// the app runs in the `development` or `test` environment, so `production`,
-/// `staging` and any other environment stay closed.
+/// For local development and tests only. It runs in a debug build in the
+/// `development` or `test` environment; anywhere else the admin refuses to
+/// start. Release builds are refused whatever their environment, so a
+/// deployment that forgets `LOCO_ENV`, which Loco then runs as
+/// `development`, stays closed. Mounting it logs a warning.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AllowAll;
+
+/// Why [`AllowAll`] may not run, if it may not.
+fn allow_all_refusal(environment: &Environment, debug_build: bool) -> Option<String> {
+    if !debug_build {
+        return Some("this is a release build".to_string());
+    }
+    if !matches!(environment, Environment::Development | Environment::Test) {
+        return Some(format!("the environment is `{environment}`"));
+    }
+    None
+}
 
 #[async_trait]
 impl AdminAuth for AllowAll {
     async fn authenticate(&self, ctx: &AppContext, _parts: &Parts) -> Result<AdminUser, AuthError> {
-        if !matches!(
-            ctx.environment,
-            Environment::Development | Environment::Test
-        ) {
+        // Checked when mounting too; this covers auth that wraps `AllowAll`
+        // without its `check`.
+        if allow_all_refusal(&ctx.environment, cfg!(debug_assertions)).is_some() {
             return Err(AuthError::Forbidden);
         }
         Ok(AdminUser::new("anonymous", "Anonymous"))
+    }
+
+    fn check(&self, ctx: &AppContext) -> loco_rs::Result<()> {
+        if let Some(reason) = allow_all_refusal(&ctx.environment, cfg!(debug_assertions)) {
+            return Err(loco_rs::Error::string(&format!(
+                "AllowAll lets anyone use the admin, so it only runs in a debug build in the \
+                 development or test environment, but {reason}; use JwtAuth or your own AdminAuth"
+            )));
+        }
+        tracing::warn!("the admin is open to anyone (AllowAll); use it for local development only");
+        Ok(())
     }
 }
 
@@ -203,12 +178,11 @@ mod jwt {
         model::{Authenticable, ModelError},
     };
 
-    use super::{Access, AdminAuth, AdminUser, AuthError, FormLogin, LoginMethod};
+    use super::{AdminAuth, AdminUser, AuthError, FormLogin, LoginMethod};
     use crate::session;
 
     type Check<U> = Arc<dyn Fn(&U) -> bool + Send + Sync>;
     type Name<U> = Arc<dyn Fn(&U) -> String + Send + Sync>;
-    type Permissions<U> = Arc<dyn Fn(&U, &Access<'_>) -> bool + Send + Sync>;
 
     /// Authenticates with Loco's JWT auth (`auth.jwt` in the config).
     ///
@@ -220,16 +194,18 @@ mod jwt {
     /// user is loaded by `pid` with [`Authenticable::find_by_claims_key`] and
     /// must pass the `allow` check on every request.
     ///
+    /// The session is the app's own: the admin reads its user id as the
+    /// user's `pid`, so the app must sign users in with their `pid` too, and
+    /// any way the app signs a user in also opens the admin to admin users.
+    ///
     /// ```rust,ignore
     /// JwtAuth::<users::Model>::new(|user| user.is_admin)
     ///     .login_endpoint("/api/auth/login")
     ///     .display_name(|user| user.email.clone())
-    ///     .permissions(|user, access| user.is_superuser || access.operation == Operation::View)
     /// ```
     pub struct JwtAuth<U> {
         allow: Check<U>,
         name: Option<Name<U>>,
-        permissions: Option<Permissions<U>>,
         login: LoginMethod,
     }
 
@@ -237,13 +213,13 @@ mod jwt {
     where
         U: Authenticable + Send + Sync + 'static,
     {
-        /// Only users for which `allow` returns `true` can use the admin.
+        /// Only users for which `allow` returns `true` can use the admin, and
+        /// they can use all of it.
         #[must_use]
         pub fn new(allow: impl Fn(&U) -> bool + Send + Sync + 'static) -> Self {
             Self {
                 allow: Arc::new(allow),
                 name: None,
-                permissions: None,
                 login: LoginMethod::Form(FormLogin::default()),
             }
         }
@@ -252,17 +228,6 @@ mod jwt {
         #[must_use]
         pub fn display_name(mut self, name: impl Fn(&U) -> String + Send + Sync + 'static) -> Self {
             self.name = Some(Arc::new(name));
-            self
-        }
-
-        /// Restrict what each user may do. Without this, allowed users may do
-        /// everything.
-        #[must_use]
-        pub fn permissions(
-            mut self,
-            permissions: impl Fn(&U, &Access<'_>) -> bool + Send + Sync + 'static,
-        ) -> Self {
-            self.permissions = Some(Arc::new(permissions));
             self
         }
 
@@ -330,15 +295,7 @@ mod jwt {
                 .name
                 .as_ref()
                 .map_or_else(|| pid.clone(), |name| name(&user));
-            let admin = AdminUser::new(pid, name);
-            Ok(match &self.permissions {
-                Some(permissions) => {
-                    let permissions = Arc::clone(permissions);
-                    let user = Arc::new(user);
-                    admin.with_policy(move |access| permissions(&user, access))
-                }
-                None => admin,
-            })
+            Ok(AdminUser::new(pid, name))
         }
 
         fn login(&self) -> LoginMethod {
@@ -352,34 +309,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn users_without_policy_can_do_everything() {
-        let user = AdminUser::new("1", "Ann");
-        assert!(user.can(&Access {
-            model: "posts",
-            operation: Operation::Delete
-        }));
-        assert_eq!(
-            format!("{user:?}"),
-            r#"AdminUser { id: "1", name: "Ann", policy: false }"#
-        );
-    }
-
-    #[test]
-    fn policies_restrict_operations() {
-        let user = AdminUser::new("1", "Ann")
-            .with_policy(|a| a.operation == Operation::View || a.model == "notes");
-        assert!(user.can(&Access {
-            model: "posts",
-            operation: Operation::View
-        }));
-        assert!(!user.can(&Access {
-            model: "posts",
-            operation: Operation::Action("publish")
-        }));
-        assert!(user.can(&Access {
-            model: "notes",
-            operation: Operation::Delete
-        }));
+    fn allow_all_needs_a_debug_build_in_development_or_test() {
+        for env in [Environment::Development, Environment::Test] {
+            assert_eq!(allow_all_refusal(&env, true), None, "{env:?}");
+            assert_eq!(
+                allow_all_refusal(&env, false).as_deref(),
+                Some("this is a release build"),
+                "{env:?}"
+            );
+        }
+        for env in [Environment::Production, Environment::Any("staging".into())] {
+            let reason = allow_all_refusal(&env, true).expect("refused");
+            assert!(reason.contains(&env.to_string()), "{reason}");
+        }
     }
 
     #[test]

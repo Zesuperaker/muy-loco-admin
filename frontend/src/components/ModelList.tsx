@@ -2,7 +2,7 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tansta
 import { type FormEvent, type MouseEvent, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
 import { type ListQuery, api, listSearch } from "../api";
-import { display, keyText } from "../format";
+import { display, encodeKeyPart, keyText } from "../format";
 import { paths } from "../paths";
 import type { AdminRecord, FieldMeta, Labels, ModelMeta } from "../types";
 import { ForeignKeyPicker } from "./ForeignKeyPicker";
@@ -82,6 +82,10 @@ function FilterControl({
       </select>
     );
   } else {
+    // Only a changed value is applied, so leaving the field keeps the page.
+    const commit = (text: string) => {
+      if (text.trim() !== value) onChange(text.trim());
+    };
     control = (
       <input
         id={id}
@@ -89,9 +93,9 @@ function FilterControl({
         defaultValue={value}
         placeholder="Any"
         onKeyDown={(e) => {
-          if (e.key === "Enter") onChange(e.currentTarget.value.trim());
+          if (e.key === "Enter") commit(e.currentTarget.value);
         }}
-        onBlur={(e) => onChange(e.currentTarget.value.trim())}
+        onBlur={(e) => commit(e.currentTarget.value)}
       />
     );
   }
@@ -134,7 +138,10 @@ function Cell({
     const pk = target?.primary_key;
     if (pk?.length === 1 && pk[0] === relation.column) {
       return (
-        <Link to={paths.record(relation.model, keyText(value))} className="text-indigo-600 hover:underline">
+        <Link
+          to={paths.record(relation.model, encodeKeyPart(keyText(value)))}
+          className="text-indigo-600 hover:underline"
+        >
           {label}
         </Link>
       );
@@ -170,6 +177,12 @@ export function ModelList({ model, models }: { model: ModelMeta; models: ModelMe
   });
   const selected = selection.scope === scope ? selection.keys : new Set<string>();
   const [q, setQ] = useState(query.q ?? "");
+  // Follow the URL when it changes another way (Back, the sidebar).
+  const [urlQ, setUrlQ] = useState(query.q);
+  if (query.q !== urlQ) {
+    setUrlQ(query.q);
+    setQ(query.q ?? "");
+  }
 
   const list = useQuery({
     queryKey: ["list", model.name, search.toString()],
@@ -226,7 +239,11 @@ export function ModelList({ model, models }: { model: ModelMeta; models: ModelMe
   const selectable = model.capabilities.delete || model.actions.length > 0;
   const page = list.data;
   const records = page?.records ?? [];
-  const allSelected = records.length > 0 && records.every((r) => selected.has(r.key));
+  // While the next page or filter loads, the previous rows stay on screen;
+  // they cannot be selected, and only rows on screen are ever acted on.
+  const stale = list.isPlaceholderData;
+  const chosen = stale ? [] : records.filter((r) => selected.has(r.key)).map((r) => r.key);
+  const allSelected = !stale && records.length > 0 && records.every((r) => selected.has(r.key));
 
   const toggle = (key: string) => {
     const keys = new Set(selected);
@@ -235,6 +252,7 @@ export function ModelList({ model, models }: { model: ModelMeta; models: ModelMe
     setSelection({ scope, keys });
   };
   const toggleAll = () => {
+    if (stale) return;
     setSelection({ scope, keys: allSelected ? new Set() : new Set(records.map((r) => r.key)) });
   };
   const sortBy = (name: string) => {
@@ -317,14 +335,14 @@ export function ModelList({ model, models }: { model: ModelMeta; models: ModelMe
         </Card>
       )}
 
-      {selected.size > 0 && (
+      {chosen.length > 0 && (
         <div className="flex flex-wrap items-center gap-2 rounded-md bg-indigo-50 px-4 py-2 text-sm">
-          <span className="font-medium">{selected.size} selected</span>
+          <span className="font-medium">{chosen.length} selected</span>
           {model.actions.map((action) => (
             <Button
               key={action.name}
               disabled={runAction.isPending}
-              onClick={() => runAction.mutate({ action: action.name, keys: [...selected] })}
+              onClick={() => runAction.mutate({ action: action.name, keys: chosen })}
             >
               {action.label}
             </Button>
@@ -334,8 +352,8 @@ export function ModelList({ model, models }: { model: ModelMeta; models: ModelMe
               variant="danger"
               disabled={bulkDelete.isPending}
               onClick={() => {
-                if (window.confirm(`Delete ${selected.size} selected records?`)) {
-                  bulkDelete.mutate([...selected]);
+                if (window.confirm(`Delete ${chosen.length} selected records?`)) {
+                  bulkDelete.mutate(chosen);
                 }
               }}
             >
@@ -355,7 +373,13 @@ export function ModelList({ model, models }: { model: ModelMeta; models: ModelMe
               <tr>
                 {selectable && (
                   <th className="w-10 px-4 py-2">
-                    <input type="checkbox" aria-label="Select all" checked={allSelected} onChange={toggleAll} />
+                    <input
+                      type="checkbox"
+                      aria-label="Select all"
+                      checked={allSelected}
+                      disabled={stale}
+                      onChange={toggleAll}
+                    />
                   </th>
                 )}
                 {columns.map((field) => (
@@ -398,7 +422,8 @@ export function ModelList({ model, models }: { model: ModelMeta; models: ModelMe
                         <input
                           type="checkbox"
                           aria-label={`Select ${record.label}`}
-                          checked={selected.has(record.key)}
+                          checked={!stale && selected.has(record.key)}
+                          disabled={stale}
                           onChange={() => toggle(record.key)}
                         />
                       </label>

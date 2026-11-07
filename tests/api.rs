@@ -25,7 +25,22 @@ fn admin() -> Admin {
                     Ok(format!("published {n} posts"))
                 })
                 .action("fail", "Always fails", |_, _| async {
-                    Err(loco_rs::Error::string("the action failed"))
+                    Err(loco_rs::Error::string("db password is hunter2"))
+                })
+                .action("refuse", "Refuses", |_, _| async {
+                    // A backtrace does not hide a message meant for the user.
+                    Err(loco_rs::Error::WithBacktrace {
+                        inner: Box::new(loco_rs::Error::BadRequest("nothing to do".into())),
+                        backtrace: Box::new(std::backtrace::Backtrace::disabled()),
+                    })
+                })
+                .action("retitle", "Retitle", |ctx: AppContext, posts| async move {
+                    for post in posts {
+                        let mut am: posts::ActiveModel = post.into_active_model();
+                        am.title = Set("hook-error".into());
+                        am.update(&ctx.db).await?;
+                    }
+                    Ok(String::new())
                 }),
         )
         .model::<post_tags::Entity>()
@@ -170,7 +185,12 @@ async fn schema_describes_models() {
     );
     assert_eq!(
         posts["actions"],
-        json!([{"name": "publish", "label": "Publish"}, {"name": "fail", "label": "Always fails"}])
+        json!([
+            {"name": "publish", "label": "Publish"},
+            {"name": "fail", "label": "Always fails"},
+            {"name": "refuse", "label": "Refuses"},
+            {"name": "retitle", "label": "Retitle"},
+        ])
     );
     assert_eq!(
         posts["related"],
@@ -292,7 +312,8 @@ async fn create_reports_field_errors() {
     assert_eq!(res.status, 422);
     assert_eq!(
         res.json()["fields"]["secret_token"],
-        json!(["is not editable"])
+        json!(["is not a field of this model"]),
+        "hidden fields are not revealed"
     );
 
     assert_eq!(count::<posts::Entity>(&db.db).await, 0);
@@ -321,6 +342,7 @@ async fn create_surfaces_hook_and_database_errors() {
     input.as_object_mut().unwrap().remove("body");
     let res = client.post("/api/models/posts/records", input).await;
     assert_eq!(res.status, 422, "missing NOT NULL column: {}", res.text());
+    assert_eq!(res.json()["error"], "the database rejected these values");
 
     let res = client
         .send_raw(
@@ -354,6 +376,11 @@ async fn unique_violations_are_conflicts() {
         )
         .await;
     assert_eq!(res.status, 409, "{}", res.text());
+    assert_eq!(
+        res.json(),
+        json!({"error": "a record with the same value already exists"}),
+        "no table or column names"
+    );
 }
 
 #[tokio::test]
@@ -762,8 +789,21 @@ async fn actions_run_on_selected_records() {
             json!({"keys": [a.id.to_string()]}),
         )
         .await;
+    assert_eq!(res.status, 500);
+    assert_eq!(res.json()["error"], "internal server error");
+    assert!(!res.text().contains("hunter2"));
+
+    let refuse = json!({"keys": [a.id.to_string()]});
+    let res = client
+        .post("/api/models/posts/actions/refuse", refuse.clone())
+        .await;
     assert_eq!(res.status, 422);
-    assert_eq!(res.json()["error"], "the action failed");
+    assert_eq!(res.json()["error"], "nothing to do");
+    let res = client
+        .post("/api/models/posts/actions/retitle", refuse)
+        .await;
+    assert_eq!(res.status, 422);
+    assert_eq!(res.json()["error"], "rejected by hook");
 
     let res = client
         .post("/api/models/posts/actions/unknown", json!({"keys": ["1"]}))
@@ -932,6 +972,30 @@ async fn invalid_model_configuration_fails_at_mount() {
             "unknown field `x` in hidden_fields",
         ),
         (
+            Admin::new(AllowAll).register(ModelAdmin::<posts::Entity>::new().list_filter(["meta"])),
+            "JSON field `meta` cannot be used in list_filter",
+        ),
+        (
+            Admin::new(AllowAll).register(ModelAdmin::<users::Entity>::new().show_fields(["x"])),
+            "unknown field `x` in show_fields",
+        ),
+        (
+            Admin::new(AllowAll).register(
+                ModelAdmin::<users::Entity>::new()
+                    .hidden_fields(["email"])
+                    .show_fields(["email"]),
+            ),
+            "field `email` is in both hidden_fields and show_fields",
+        ),
+        (
+            Admin::new(AllowAll).register(
+                ModelAdmin::<users::Entity>::new()
+                    .hidden_fields(["name"])
+                    .list_display(["password"]),
+            ),
+            "hidden field `password` used in list_display",
+        ),
+        (
             Admin::new(AllowAll)
                 .register(ModelAdmin::<users::Entity>::new().readonly_fields(["x"])),
             "unknown field `x` in readonly_fields",
@@ -982,7 +1046,8 @@ async fn custom_configuration_is_applied() {
         .register(
             ModelAdmin::<users::Entity>::new()
                 .name("people")
-                .hidden_fields(["password"])
+                .hidden_fields(["pid"])
+                .show_fields(["api_key"])
                 .readonly_fields(["email"])
                 .list_display(["email", "api_key"])
                 .search_fields(["api_key", "id"])
@@ -999,7 +1064,12 @@ async fn custom_configuration_is_applied() {
     let schema = client.get("/api/schema").await.json();
     let people = model(&schema, "people");
     assert_eq!(people["table"], "users");
-    assert!(field(people, "api_key").is_some());
+    assert!(field(people, "api_key").is_some(), "shown on request");
+    assert!(field(people, "pid").is_none(), "hidden on request");
+    assert!(
+        field(people, "password").is_none(),
+        "still hidden by default"
+    );
     assert_eq!(field(people, "email").unwrap()["readonly"], true);
     assert_eq!(people["list_display"], json!(["email", "api_key"]));
     assert_eq!(people["list_filter"], json!(["is_admin"]));
@@ -1027,4 +1097,167 @@ async fn custom_configuration_is_applied() {
     assert_eq!(res.status, 403);
     assert_eq!(client.get("/api/models/users/records").await.status, 404);
     drop(db);
+}
+
+#[tokio::test]
+async fn integers_beyond_javascript_precision_are_strings() {
+    let (db, _ctx, client) = client().await;
+    let user = create_user(&db.db, "ann@example.com", true).await;
+    let mut input = new_post(user.id);
+    input["views"] = json!("9007199254740993");
+    let res = client.post("/api/models/posts/records", input).await;
+    assert_eq!(res.status, StatusCode::CREATED, "{}", res.text());
+    let record = res.json()["record"].clone();
+    assert_eq!(record["values"]["views"], "9007199254740993");
+    let key = record["key"].as_str().unwrap();
+    let stored = posts::Entity::find_by_id(key.parse::<i32>().unwrap())
+        .one(&db.db)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.views, 9_007_199_254_740_993);
+
+    // The UI sends the string back unchanged.
+    let res = client
+        .patch(
+            &format!("/api/models/posts/records/{key}"),
+            json!({"views": "9007199254740995"}),
+        )
+        .await;
+    assert_eq!(res.json()["record"]["values"]["views"], "9007199254740995");
+    let list = client
+        .get("/api/models/posts/records?filter.views=9007199254740995")
+        .await
+        .json();
+    assert_eq!(list["total"], 1);
+    assert_eq!(
+        list["records"][0]["values"]["user_id"], user.id,
+        "small stay numbers"
+    );
+}
+
+#[tokio::test]
+async fn search_ignores_case_of_non_ascii_letters() {
+    let (db, _ctx, client) = client().await;
+    let user = create_user(&db.db, "ann@example.com", true).await;
+    for title in ["Москва", "Élan vital", "ÄRGER", "plain"] {
+        create_post(&db.db, user.id, title).await;
+    }
+    for (q, expected) in [
+        ("Москва", "Москва"),
+        ("москва", "Москва"),
+        ("МОСКВА", "Москва"),
+        ("élan", "Élan vital"),
+        ("Élan Vital", "Élan vital"),
+        ("ärger", "ÄRGER"),
+        ("ÄRGER", "ÄRGER"),
+        ("PLAIN", "plain"),
+    ] {
+        let body = client
+            .get(&format!(
+                "/api/models/posts/records?q={}",
+                percent_encoding::utf8_percent_encode(q, percent_encoding::NON_ALPHANUMERIC)
+            ))
+            .await
+            .json();
+        let titles: Vec<&str> = body["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["values"]["title"].as_str().unwrap())
+            .collect();
+        assert_eq!(titles, [expected], "q={q}");
+    }
+}
+
+#[tokio::test]
+async fn lookup_finds_records_by_key() {
+    let (db, ctx) = setup().await;
+    let router = Admin::new(AllowAll)
+        .register(
+            ModelAdmin::<posts::Entity>::new()
+                .name("bare")
+                .search_fields(Vec::<String>::new()),
+        )
+        .model::<posts::Entity>()
+        .router(&ctx)
+        .unwrap();
+    let client = Client::new(router);
+    let user = create_user(&db.db, "ann@example.com", true).await;
+    let mut first = None;
+    for i in 0..30 {
+        let post = create_post(&db.db, user.id, &format!("post {i}")).await;
+        first.get_or_insert(post.id);
+    }
+    let first = first.unwrap();
+    for model in ["bare", "posts"] {
+        let body = client
+            .get(&format!("/api/models/{model}/lookup?q={first}"))
+            .await
+            .json();
+        let keys: Vec<&str> = body["choices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["key"].as_str().unwrap())
+            .collect();
+        assert!(
+            keys.contains(&first.to_string().as_str()),
+            "{model}: {keys:?}"
+        );
+    }
+    let body = client.get("/api/models/bare/lookup").await.json();
+    assert_eq!(
+        body["choices"].as_array().unwrap().len(),
+        20,
+        "newest first"
+    );
+}
+
+#[tokio::test]
+async fn out_of_range_pages_and_json_filters_are_bad_requests() {
+    let (db, _ctx, client) = client().await;
+    let user = create_user(&db.db, "ann@example.com", true).await;
+    create_post(&db.db, user.id, "p").await;
+    for uri in [
+        "/api/models/posts/records?page=999999999999999999",
+        "/api/models/posts/records?page=36893488147419103&per_page=500",
+    ] {
+        let res = client.get(uri).await;
+        assert_eq!(res.status, 400, "{uri}: {}", res.text());
+        assert_eq!(res.json()["error"], "`page` is too large");
+    }
+    let res = client
+        .get("/api/models/posts/records?filter.meta=%7B%7D")
+        .await;
+    assert_eq!(res.status, 400, "{}", res.text());
+    let res = client.get("/api/models/posts/records?sort=meta").await;
+    assert_eq!(res.status, 200, "JSON sorts by its text: {}", res.text());
+}
+
+#[tokio::test]
+async fn values_the_database_rejects_are_validation_errors() {
+    use sea_orm::DbBackend;
+    let (db, _ctx, client) = client().await;
+    let user = create_user(&db.db, "ann@example.com", true).await;
+    let postgres = db.db.get_database_backend() == DbBackend::Postgres;
+    for (name, field, value) in [
+        ("too large decimal", "price", json!("123456789012.50")),
+        ("NUL in text", "title", json!("a\u{0}b")),
+        ("NUL in JSON", "meta", json!({"k": "\u{0}"})),
+    ] {
+        let mut input = new_post(user.id);
+        input[field] = value;
+        let res = client.post("/api/models/posts/records", input).await;
+        if postgres {
+            assert_eq!(res.status, 422, "{name}: {}", res.text());
+            assert_eq!(
+                res.json()["error"],
+                "the database rejected these values",
+                "{name}"
+            );
+        } else {
+            assert_eq!(res.status, StatusCode::CREATED, "{name}: {}", res.text());
+        }
+    }
 }

@@ -1,13 +1,12 @@
-# Runs once CI passes on a push to main. release-please keeps the release PR up to date; when that
-# PR is merged it tags a GitHub release, and the crate is then published to crates.io with trusted
-# publishing (no stored token). crates.io trusted publisher: workflow `release.yml`, environment
-# `release`.
+# Runs on every push to main: CI first (ci.yml, called as a reusable workflow), then release-please
+# keeps the release PR up to date; when that PR is merged it tags a GitHub release, and the crate is
+# then published to crates.io with trusted publishing (no stored token). crates.io trusted
+# publisher: workflow `release.yml`, environment `release`. Trusted publishing refuses runs started
+# by `workflow_run` or `pull_request_target`, hence a push trigger with CI inside.
 name: Release
 
 on:
-  workflow_run:
-    workflows: [CI]
-    types: [completed]
+  push:
     branches: [main]
 
 permissions:
@@ -22,13 +21,15 @@ env:
   RUST_VERSION: 1.99.1 # keep in sync with ci.yml
 
 jobs:
+  ci:
+    name: CI
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
   release-please:
     name: Release Please
-    # `branches` matches the triggering run's head branch name, which a fork's PR can also use.
-    if: >-
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.event == 'push' &&
-      github.event.workflow_run.head_repository.full_name == github.repository
+    needs: ci
     runs-on: ubuntu-24.04
     permissions:
       contents: write # release PR branch, tags and GitHub releases
@@ -38,7 +39,7 @@ jobs:
       release_created: ${{ steps.release.outputs.release_created }}
       tag_name: ${{ steps.release.outputs.tag_name }}
     steps:
-      - uses: googleapis/release-please-action@v5.0.0
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         id: release
 
   publish:
@@ -51,7 +52,7 @@ jobs:
       contents: read
       id-token: write # trusted publishing
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.release-please.outputs.tag_name }}
           persist-credentials: false
@@ -60,7 +61,7 @@ jobs:
         run: |
           rustup toolchain install "$RUST_VERSION" --profile minimal
           rustup default "$RUST_VERSION"
-      - uses: rust-lang/crates-io-auth-action@v1.0.6
+      - uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
         id: auth
       - run: cargo publish --locked
         env:

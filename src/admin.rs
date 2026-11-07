@@ -270,6 +270,7 @@ impl Admin {
         if !self.errors.is_empty() {
             return Err(Error::string(&self.errors.join("; ")));
         }
+        self.auth.check(ctx)?;
         let path = settings.path.as_deref().unwrap_or(&self.path);
         let base_path = validate_path(path).map_err(|e| Error::string(&e))?;
         let title = settings.title.as_deref().unwrap_or(&self.title);

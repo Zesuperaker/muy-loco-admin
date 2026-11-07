@@ -197,23 +197,53 @@ async fn login_endpoint_moves_the_login_form() {
 }
 
 #[tokio::test]
-async fn allow_all_only_opens_development_and_test() {
+async fn allow_all_only_mounts_in_development_and_test() {
     let test_db = database().await;
-    for (env, status) in [
-        (Environment::Development, 200),
-        (Environment::Test, 200),
-        (Environment::Production, 403),
-        (Environment::Any("staging".into()), 403),
-        (Environment::Any("prod".into()), 403),
-    ] {
+    for env in [Environment::Development, Environment::Test] {
         let ctx = context(&test_db, env.clone(), &json!({}));
         let router = Admin::new(AllowAll)
             .model::<users::Entity>()
             .router(&ctx)
             .unwrap();
         let res = Client::new(router).get("/api/me").await;
-        assert_eq!(res.status, status, "{env:?}");
+        assert_eq!(res.status, 200, "{env:?}");
     }
+    for env in [
+        Environment::Production,
+        Environment::Any("staging".into()),
+        Environment::Any("prod".into()),
+    ] {
+        let ctx = context(&test_db, env.clone(), &json!({}));
+        let err = Admin::new(AllowAll)
+            .model::<users::Entity>()
+            .router(&ctx)
+            .expect_err("refuses to mount")
+            .to_string();
+        assert!(err.contains("AllowAll"), "{env:?}: {err}");
+        assert!(err.contains(&format!("`{env}`")), "{env:?}: {err}");
+    }
+}
+
+/// Auth that delegates to `AllowAll` but not its mount check.
+struct Wrapped;
+
+#[async_trait]
+impl AdminAuth for Wrapped {
+    async fn authenticate(&self, ctx: &AppContext, parts: &Parts) -> Result<AdminUser, AuthError> {
+        AllowAll.authenticate(ctx, parts).await
+    }
+}
+
+#[tokio::test]
+async fn allow_all_still_refuses_requests_where_it_cannot_mount() {
+    let test_db = database().await;
+    let ctx = context(&test_db, Environment::Production, &json!({}));
+    let router = Admin::new(Wrapped)
+        .model::<users::Entity>()
+        .router(&ctx)
+        .unwrap();
+    let res = Client::new(router).get("/api/me").await;
+    assert_eq!(res.status, 403);
 }
 
 /// A custom auth reading a header.

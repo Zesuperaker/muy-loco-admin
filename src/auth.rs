@@ -110,26 +110,55 @@ pub trait AdminAuth: Send + Sync + 'static {
     fn login(&self) -> LoginMethod {
         LoginMethod::None
     }
+
+    /// Called once when the admin is mounted. An error stops the app from
+    /// starting, for auth that must not run where it is mounted.
+    fn check(&self, _ctx: &AppContext) -> loco_rs::Result<()> {
+        Ok(())
+    }
 }
 
 /// Lets every request in as an anonymous admin.
 ///
-/// Meant for local development and tests. Requests are refused (403) unless
-/// the app runs in the `development` or `test` environment, so `production`,
-/// `staging` and any other environment stay closed.
+/// For local development and tests only. It runs in a debug build in the
+/// `development` or `test` environment; anywhere else the admin refuses to
+/// start. Release builds are refused whatever their environment, so a
+/// deployment that forgets `LOCO_ENV`, which Loco then runs as
+/// `development`, stays closed. Mounting it logs a warning.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AllowAll;
+
+/// Why [`AllowAll`] may not run, if it may not.
+fn allow_all_refusal(environment: &Environment, debug_build: bool) -> Option<String> {
+    if !debug_build {
+        return Some("this is a release build".to_string());
+    }
+    if !matches!(environment, Environment::Development | Environment::Test) {
+        return Some(format!("the environment is `{environment}`"));
+    }
+    None
+}
 
 #[async_trait]
 impl AdminAuth for AllowAll {
     async fn authenticate(&self, ctx: &AppContext, _parts: &Parts) -> Result<AdminUser, AuthError> {
-        if !matches!(
-            ctx.environment,
-            Environment::Development | Environment::Test
-        ) {
+        // Checked when mounting too; this covers auth that wraps `AllowAll`
+        // without its `check`.
+        if allow_all_refusal(&ctx.environment, cfg!(debug_assertions)).is_some() {
             return Err(AuthError::Forbidden);
         }
         Ok(AdminUser::new("anonymous", "Anonymous"))
+    }
+
+    fn check(&self, ctx: &AppContext) -> loco_rs::Result<()> {
+        if let Some(reason) = allow_all_refusal(&ctx.environment, cfg!(debug_assertions)) {
+            return Err(loco_rs::Error::string(&format!(
+                "AllowAll lets anyone use the admin, so it only runs in a debug build in the \
+                 development or test environment, but {reason}; use JwtAuth or your own AdminAuth"
+            )));
+        }
+        tracing::warn!("the admin is open to anyone (AllowAll); use it for local development only");
+        Ok(())
     }
 }
 
@@ -274,6 +303,22 @@ mod jwt {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn allow_all_needs_a_debug_build_in_development_or_test() {
+        for env in [Environment::Development, Environment::Test] {
+            assert_eq!(allow_all_refusal(&env, true), None, "{env:?}");
+            assert_eq!(
+                allow_all_refusal(&env, false).as_deref(),
+                Some("this is a release build"),
+                "{env:?}"
+            );
+        }
+        for env in [Environment::Production, Environment::Any("staging".into())] {
+            let reason = allow_all_refusal(&env, true).expect("refused");
+            assert!(reason.contains(&env.to_string()), "{reason}");
+        }
+    }
 
     #[test]
     fn auth_errors_map_to_admin_errors() {

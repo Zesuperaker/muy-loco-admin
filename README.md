@@ -116,8 +116,9 @@ app does not use Loco's JWT auth, implement `AdminAuth` (see [Authentication](#a
 - `JwtAuth<U: Authenticable>` uses Loco's `auth.jwt` config. The UI trades the token from the
   login form for a [session](#sessions) cookie and never stores it. Scripts can send a token
   instead, as `Authorization: Bearer` or from `auth.jwt.location`.
-- `AllowAll` allows anonymous access in the `development` and `test` environments only; every
-  other environment (`production`, `staging`, ...) is refused.
+- `AllowAll` lets anyone in, for local development: it runs only in a debug build in the
+  `development` or `test` environment, and logs a warning when mounted. Anywhere else, including
+  any release build, the admin refuses to start.
 - For anything else, implement `AdminAuth` and return `AdminUser::new(id, name)`.
 
 Every admin user may do everything; what can be done to each model is set with `ModelAdmin`.

@@ -30,7 +30,8 @@ cd dogfood && docker compose up --build -d && cd e2e && npm test
   contain the `/__MLA_BASE__` placeholder.
 - Crate dependencies use loco-rs's version requirement as the floor; crates loco-rs does not use
   take their latest release as the floor. Dev dependencies, the dogfood app, npm packages,
-  Docker images and GitHub Actions are pinned to exact latest versions.
+  Docker images and GitHub Actions are pinned to exact latest versions; `release.yml` pins
+  actions by commit SHA, with the version in a comment.
 - `rust-version` stays at loco-rs's (1.94).
 - Do not add low-star or unmaintained dependencies.
 - Keep coverage at or above the CI thresholds (Rust 90% lines, frontend 85% lines).

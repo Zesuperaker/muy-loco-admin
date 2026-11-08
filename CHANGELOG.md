@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.1.1](https://github.com/Zesuperaker/muy-loco-admin/compare/v0.1.0...v0.1.1) (2026-11-08)
+
+
+### Bug Fixes
+
+* **admin:** refuse backslashes in site_url ([d36cbf5](https://github.com/Zesuperaker/muy-loco-admin/commit/d36cbf51806a0c156619fe2559869581d26eb992))
+* **api:** stop reporting the crate version in the public config ([d36cbf5](https://github.com/Zesuperaker/muy-loco-admin/commit/d36cbf51806a0c156619fe2559869581d26eb992))
+* **auth:** skip tokens that do not validate instead of refusing the request ([d36cbf5](https://github.com/Zesuperaker/muy-loco-admin/commit/d36cbf51806a0c156619fe2559869581d26eb992))
+* **session:** refuse Loco's default session secret in release builds ([d36cbf5](https://github.com/Zesuperaker/muy-loco-admin/commit/d36cbf51806a0c156619fe2559869581d26eb992))
+
 ## 0.1.0 (2026-11-07)
 
 

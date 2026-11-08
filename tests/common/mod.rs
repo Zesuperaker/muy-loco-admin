@@ -18,6 +18,7 @@ use sea_orm::{
     ActiveModelTrait, ConnectOptions, ConnectionTrait, Database, DatabaseConnection, DbBackend,
     EntityTrait, Schema, Set,
 };
+use sea_orm_migration::{MigrationTrait, MigratorTrait};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
@@ -42,12 +43,21 @@ pub mod users {
         pub password: String,
         pub api_key: String,
         pub is_admin: bool,
+        /// Added by `muy_loco_admin::migrations::roles`.
+        pub admin_role_id: Option<i64>,
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
     pub enum Relation {
         #[sea_orm(has_many = "super::posts::Entity")]
         Posts,
+        // As `sea-orm-cli` generates it once the roles table exists.
+        #[sea_orm(
+            belongs_to = "super::admin_roles::Entity",
+            from = "Column::AdminRoleId",
+            to = "super::admin_roles::Column::Id"
+        )]
+        AdminRoles,
     }
 
     impl Related<super::posts::Entity> for Entity {
@@ -93,6 +103,55 @@ pub mod users {
                 .ok_or(ModelError::EntityNotFound)
         }
     }
+}
+
+/// `users` as the app's own migrations create it, before the admin's.
+mod app_users {
+    use sea_orm::entity::prelude::*;
+
+    #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
+    #[sea_orm(table_name = "users")]
+    pub struct Model {
+        pub created_at: DateTimeWithTimeZone,
+        pub updated_at: DateTimeWithTimeZone,
+        #[sea_orm(primary_key)]
+        pub id: i32,
+        pub pid: Uuid,
+        #[sea_orm(unique)]
+        pub email: String,
+        pub name: String,
+        pub password: String,
+        pub api_key: String,
+        pub is_admin: bool,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
+/// The roles table as `sea-orm-cli` generates it in an app.
+pub mod admin_roles {
+    use sea_orm::entity::prelude::*;
+
+    #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
+    #[sea_orm(table_name = "admin_roles")]
+    pub struct Model {
+        #[sea_orm(primary_key)]
+        pub id: i64,
+        #[sea_orm(unique)]
+        pub name: String,
+        #[sea_orm(column_type = "Text")]
+        pub permissions: String,
+        pub created_at: DateTimeWithTimeZone,
+        pub updated_at: DateTimeWithTimeZone,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
 }
 
 pub mod posts {
@@ -268,6 +327,16 @@ fn stamp<A>(
     am
 }
 
+/// An app's `Migrator`, with only the admin's migrations.
+pub struct Migrator;
+
+#[async_trait::async_trait]
+impl MigratorTrait for Migrator {
+    fn migrations() -> Vec<Box<dyn MigrationTrait>> {
+        vec![muy_loco_admin::migrations::roles("users")]
+    }
+}
+
 static COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn database_url() -> String {
@@ -328,9 +397,12 @@ async fn create_schema(db: &DatabaseConnection) {
             .expect("enum statement");
         db.execute(&stmt).await.expect("create enum");
     }
-    db.execute(&schema.create_table_from_entity(users::Entity))
+    // The app's own migrations create `users` without a role column; the
+    // admin's migration adds it.
+    db.execute(&schema.create_table_from_entity(app_users::Entity))
         .await
         .expect("create users");
+    Migrator::up(db, None).await.expect("admin migrations");
     db.execute(&schema.create_table_from_entity(posts::Entity))
         .await
         .expect("create posts");
@@ -402,6 +474,18 @@ pub async fn create_user(db: &DatabaseConnection, email: &str, is_admin: bool) -
     .insert(db)
     .await
     .expect("insert user")
+}
+
+/// Give `user` role `role`, or full access with `None`.
+pub async fn set_role(db: &DatabaseConnection, user: &users::Model, role: Option<i64>) {
+    users::ActiveModel {
+        id: Set(user.id),
+        admin_role_id: Set(role),
+        ..Default::default()
+    }
+    .update(db)
+    .await
+    .expect("set role");
 }
 
 pub async fn create_post(db: &DatabaseConnection, user_id: i32, title: &str) -> posts::Model {

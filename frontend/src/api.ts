@@ -9,6 +9,8 @@ import type {
   Labels,
   ModelMeta,
   Page,
+  Permissions,
+  Role,
 } from "./types";
 
 const DEV_BASE = "/admin";
@@ -147,6 +149,13 @@ export const api = {
     });
     return res.blob();
   },
+  roles: () => json<{ roles: Role[] }>("/roles"),
+  role: (id: number) => json<{ role: Role }>(`/roles/${id}`),
+  createRole: (input: { name: string; permissions: Permissions }) =>
+    send<{ role: Role }>("POST", "/roles", input),
+  updateRole: (id: number, input: { name: string; permissions: Permissions }) =>
+    send<{ role: Role }>("PATCH", `/roles/${id}`, input),
+  deleteRole: (id: number) => json<{ deleted: number }>(`/roles/${id}`, { method: "DELETE" }),
   /** End the session (the app's too). */
   signOut: async (): Promise<void> => {
     await request("/session", { method: "DELETE" });

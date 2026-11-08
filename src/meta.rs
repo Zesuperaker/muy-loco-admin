@@ -124,6 +124,9 @@ pub struct FieldMeta {
     pub choices: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub relation: Option<RelationMeta>,
+    /// Whether this is the users' role column (see [`crate::migrations::roles`]).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub role: bool,
 }
 
 /// Another model whose foreign key points at this one.
@@ -156,8 +159,8 @@ pub struct ActionMeta {
     pub label: String,
 }
 
-/// Operations a model supports, the same for every admin user.
-#[derive(Debug, Clone, Copy, Serialize)]
+/// Operations a model supports. A user with a role may do only part of them.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct Capabilities {
     pub view: bool,

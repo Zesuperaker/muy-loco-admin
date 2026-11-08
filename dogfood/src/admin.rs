@@ -12,7 +12,9 @@ use crate::models::{
 #[must_use]
 pub fn admin() -> Admin {
     Admin::new(
-        JwtAuth::<users::Model>::new(|user| user.is_admin).display_name(|user| user.email.clone()),
+        JwtAuth::<users::Model>::new(|user| user.is_admin)
+            .display_name(|user| user.email.clone())
+            .roles(users::Column::AdminRoleId, [users::Column::IsAdmin]),
     )
     .title("Dogfood Admin")
     .register(
@@ -24,10 +26,11 @@ pub fn admin() -> Admin {
                 "email",
                 "name",
                 "is_admin",
+                "admin_role_id",
                 "email_verified_at",
                 "created_at",
             ])
-            .list_filter(["is_admin"])
+            .list_filter(["is_admin", "admin_role_id"])
             .readonly_fields([
                 "pid",
                 "created_at",

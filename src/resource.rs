@@ -84,16 +84,22 @@ pub(crate) trait Resource: Send + Sync {
     async fn count(&self, db: &DatabaseConnection) -> AdminResult<u64>;
     async fn list(&self, db: &DatabaseConnection, params: &ListParams) -> AdminResult<Page>;
     async fn get(&self, db: &DatabaseConnection, key: &str) -> AdminResult<Record>;
+    /// Insert a record from `input`. Fields in `locked` are read-only, like
+    /// the model's own read-only fields.
     async fn create(
         &self,
         db: &DatabaseConnection,
         input: Map<String, Json>,
+        locked: &[String],
     ) -> AdminResult<Record>;
+    /// Change a record with `input`. Fields in `locked` are read-only, like
+    /// the model's own read-only fields.
     async fn update(
         &self,
         db: &DatabaseConnection,
         key: &str,
         input: Map<String, Json>,
+        locked: &[String],
     ) -> AdminResult<Record>;
     async fn delete(&self, db: &DatabaseConnection, keys: &[String]) -> AdminResult<u64>;
     /// Stream the filtered records as CSV, in primary-key order. The database
@@ -391,6 +397,7 @@ where
                     column: c.clone(),
                     model: None,
                 }),
+                role: false,
             });
             columns.push(Column {
                 col: *col,
@@ -684,6 +691,7 @@ where
         am: &mut E::ActiveModel,
         current: Option<&E::Model>,
         input: Map<String, Json>,
+        locked: &[String],
     ) -> AdminResult<bool> {
         let mut errors = FieldErrors::new();
         let mut changed = false;
@@ -697,7 +705,10 @@ where
                     .push("is not a field of this model".to_string());
                 continue;
             };
-            if column.readonly || (current.is_some() && column.primary_key) {
+            if column.readonly
+                || locked.contains(&name)
+                || (current.is_some() && column.primary_key)
+            {
                 errors
                     .entry(name)
                     .or_default()
@@ -726,10 +737,7 @@ where
         if errors.is_empty() {
             Ok(changed)
         } else {
-            Err(AdminError::Validation {
-                message: "some fields are invalid".to_string(),
-                fields: errors,
-            })
+            Err(AdminError::invalid(errors))
         }
     }
 }
@@ -823,9 +831,10 @@ where
         &self,
         db: &DatabaseConnection,
         input: Map<String, Json>,
+        locked: &[String],
     ) -> AdminResult<Record> {
         let mut am = <E::ActiveModel as ActiveModelBehavior>::new();
-        self.apply_input(&mut am, None, input)?;
+        self.apply_input(&mut am, None, input, locked)?;
         let model = am.insert(db).await?;
         Ok(self.record(&model))
     }
@@ -835,10 +844,11 @@ where
         db: &DatabaseConnection,
         key: &str,
         input: Map<String, Json>,
+        locked: &[String],
     ) -> AdminResult<Record> {
         let model = self.find(db, key).await?;
         let mut am = model.clone().into_active_model();
-        if !self.apply_input(&mut am, Some(&model), input)? {
+        if !self.apply_input(&mut am, Some(&model), input, locked)? {
             return Ok(self.record(&model));
         }
         let updated = am.update(db).await?;

@@ -51,6 +51,14 @@ impl AdminError {
         Self::BadRequest(msg.into())
     }
 
+    /// Submitted fields that were rejected, each with why.
+    pub(crate) fn invalid(fields: FieldErrors) -> Self {
+        Self::Validation {
+            message: "some fields are invalid".to_string(),
+            fields,
+        }
+    }
+
     /// The HTTP status code for this error.
     #[must_use]
     pub fn status(&self) -> StatusCode {

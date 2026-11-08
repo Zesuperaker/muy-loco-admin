@@ -32,10 +32,11 @@ fn config(session: Value, server: Option<Value>) -> Value {
     config
 }
 
-fn mount(test_db: &TestDb, env: Environment, session: Value) -> Result<Client, String> {
+async fn mount(test_db: &TestDb, env: Environment, session: Value) -> Result<Client, String> {
     let ctx = context(test_db, env, &config(session, None));
     admin()
         .router(&ctx)
+        .await
         .map(Client::new)
         .map_err(|e| e.to_string())
 }
@@ -65,7 +66,7 @@ async fn send(client: &Client, method: Method, uri: &str, cookie: &str) -> Res {
 #[tokio::test]
 async fn the_login_form_trades_its_token_for_a_session_cookie() {
     let (db, ctx) = setup().await;
-    let client = Client::new(admin().router(&ctx).unwrap());
+    let client = Client::new(admin().router(&ctx).await.unwrap());
     let staff = create_user(&db.db, "staff@example.com", true).await;
 
     let res = client
@@ -76,7 +77,12 @@ async fn the_login_form_trades_its_token_for_a_session_cookie() {
     assert_eq!(res.status, 200);
     assert_eq!(
         res.json(),
-        json!({"id": staff.pid.to_string(), "name": "staff@example.com"})
+        json!({
+            "id": staff.pid.to_string(),
+            "name": "staff@example.com",
+            "role": null,
+            "can_manage_roles": false
+        })
     );
     let cookie = set_cookie(&res);
     assert!(cookie.starts_with("loco_session="), "{cookie}");
@@ -112,7 +118,7 @@ async fn the_login_form_trades_its_token_for_a_session_cookie() {
 #[tokio::test]
 async fn sign_in_needs_an_admin_and_valid_credentials() {
     let (db, ctx) = setup().await;
-    let client = Client::new(admin().router(&ctx).unwrap());
+    let client = Client::new(admin().router(&ctx).await.unwrap());
     let regular = create_user(&db.db, "joe@example.com", false).await;
 
     let res = client.send(Method::POST, "/api/session", None).await;
@@ -141,7 +147,7 @@ async fn sign_in_needs_an_admin_and_valid_credentials() {
 #[tokio::test]
 async fn sessions_are_rechecked_on_every_request() {
     let (db, ctx) = setup().await;
-    let client = Client::new(admin().router(&ctx).unwrap());
+    let client = Client::new(admin().router(&ctx).await.unwrap());
     let staff = create_user(&db.db, "staff@example.com", true).await;
     let cookie = sign_in(&client, &staff).await;
     assert_eq!(
@@ -175,7 +181,9 @@ async fn sessions_are_rechecked_on_every_request() {
 #[tokio::test]
 async fn server_side_sessions_end_on_sign_out() {
     let test_db = database().await;
-    let client = mount(&test_db, Environment::Test, json!({"store": "database"})).unwrap();
+    let client = mount(&test_db, Environment::Test, json!({"store": "database"}))
+        .await
+        .unwrap();
     let staff = create_user(&test_db.db, "staff@example.com", true).await;
     let cookie = sign_in(&client, &staff).await;
     assert_eq!(
@@ -203,7 +211,7 @@ async fn https_hosts_get_secure_host_only_cookies() {
             Some(json!({"port": 5150, "host": "https://admin.example.com"})),
         ),
     );
-    let client = Client::new(admin().router(&ctx).unwrap());
+    let client = Client::new(admin().router(&ctx).await.unwrap());
     let staff = create_user(&test_db.db, "staff@example.com", true).await;
     let res = client
         .clone()
@@ -226,14 +234,19 @@ async fn https_hosts_get_secure_host_only_cookies() {
 async fn mounting_checks_the_session_setup() {
     let test_db = database().await;
     for env in [Environment::Production, Environment::Any("staging".into())] {
-        let err = mount(&test_db, env.clone(), json!({})).err().unwrap();
+        let err = mount(&test_db, env.clone(), json!({})).await.err().unwrap();
         assert!(err.contains("auth.session.secret"), "{env:?}: {err}");
-        mount(&test_db, env, json!({"secret": SESSION_SECRET})).unwrap();
+        mount(&test_db, env, json!({"secret": SESSION_SECRET}))
+            .await
+            .unwrap();
     }
-    mount(&test_db, Environment::Development, json!({})).unwrap();
+    mount(&test_db, Environment::Development, json!({}))
+        .await
+        .unwrap();
 
     for name in ["__Host-loco_session", "__secure-loco_session"] {
         let err = mount(&test_db, Environment::Test, json!({"cookie_name": name}))
+            .await
             .err()
             .unwrap();
         assert!(err.contains("Secure"), "{name}: {err}");
@@ -242,6 +255,7 @@ async fn mounting_checks_the_session_setup() {
             Environment::Test,
             json!({"cookie_name": name, "secure": true}),
         )
+        .await
         .unwrap();
     }
 
@@ -254,6 +268,7 @@ async fn mounting_checks_the_session_setup() {
         Admin::new(redirect)
             .model::<users::Entity>()
             .router(&ctx)
+            .await
             .unwrap(),
     );
     assert_eq!(client.get("/api/me").await.status, 401);
@@ -273,6 +288,7 @@ async fn mounting_checks_the_session_setup() {
         Admin::new(JwtAuth::<users::Model>::new(|_| true).login_method(LoginMethod::None))
             .model::<users::Entity>()
             .router(&ctx)
+            .await
             .is_ok()
     );
 }
@@ -282,7 +298,9 @@ async fn sessions_signed_with_the_development_secret_are_ignored_elsewhere() {
     let test_db = database().await;
     let staff = create_user(&test_db.db, "staff@example.com", true).await;
     // A cookie signed with Loco's public development secret, as anyone could forge.
-    let dev = mount(&test_db, Environment::Development, json!({})).unwrap();
+    let dev = mount(&test_db, Environment::Development, json!({}))
+        .await
+        .unwrap();
     let forged = sign_in(&dev, &staff).await;
 
     let ctx = context(
@@ -297,6 +315,7 @@ async fn sessions_signed_with_the_development_secret_are_ignored_elsewhere() {
         Admin::new(redirect)
             .model::<users::Entity>()
             .router(&ctx)
+            .await
             .unwrap(),
     );
     assert_eq!(
@@ -308,7 +327,7 @@ async fn sessions_signed_with_the_development_secret_are_ignored_elsewhere() {
 #[tokio::test]
 async fn bearer_tokens_still_work_without_a_session() {
     let (db, ctx) = setup().await;
-    let client = Client::new(admin().router(&ctx).unwrap());
+    let client = Client::new(admin().router(&ctx).await.unwrap());
     let staff = create_user(&db.db, "staff@example.com", true).await;
     let res = client
         .with_token(token(&staff.pid.to_string()))
@@ -321,7 +340,7 @@ async fn bearer_tokens_still_work_without_a_session() {
 #[tokio::test]
 async fn tokens_that_do_not_validate_are_skipped() {
     let (db, ctx) = setup().await;
-    let client = Client::new(admin().router(&ctx).unwrap());
+    let client = Client::new(admin().router(&ctx).await.unwrap());
     let staff = create_user(&db.db, "staff@example.com", true).await;
     let session = sign_in(&client, &staff).await;
     let foreign = JWT::new("YW5vdGhlci1hcHBzLWp3dC1zZWNyZXQtMDEyMzQ1Njc4OQ==") // another app's secret
@@ -363,7 +382,7 @@ async fn the_login_form_wins_over_a_token_cookie() {
             "session": {}
         }}),
     );
-    let client = Client::new(admin().router(&ctx).unwrap());
+    let client = Client::new(admin().router(&ctx).await.unwrap());
     let staff = create_user(&test_db.db, "staff@example.com", true).await;
     let joe = create_user(&test_db.db, "joe@example.com", false).await;
     let stale = "auth_token=stale".to_string();

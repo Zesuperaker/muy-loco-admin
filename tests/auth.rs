@@ -32,7 +32,7 @@ fn jwt_admin() -> Admin {
 #[tokio::test]
 async fn jwt_auth_flow() {
     let (db, ctx) = setup().await;
-    let router = jwt_admin().router(&ctx).unwrap();
+    let router = jwt_admin().router(&ctx).await.unwrap();
     let anonymous = Client::new(router.clone());
 
     let config = anonymous.get("/api/config").await.json();
@@ -64,7 +64,12 @@ async fn jwt_auth_flow() {
     let me = staff_client.get("/api/me").await.json();
     assert_eq!(
         me,
-        json!({"id": staff.pid.to_string(), "name": "staff@example.com"})
+        json!({
+            "id": staff.pid.to_string(),
+            "name": "staff@example.com",
+            "role": null,
+            "can_manage_roles": false
+        })
     );
 
     // Every admin user may do everything the models allow.
@@ -110,6 +115,7 @@ async fn jwt_token_from_configured_cookie() {
     let router = Admin::new(JwtAuth::<users::Model>::new(|_| true))
         .model::<users::Entity>()
         .router(&ctx)
+        .await
         .unwrap();
     let user = create_user(&test_db.db, "ann@example.com", false).await;
     let cookie = format!("session={}", token(&user.pid.to_string()));
@@ -142,6 +148,7 @@ async fn jwt_without_config_is_an_error() {
     ))
     .model::<users::Entity>()
     .router(&ctx)
+    .await
     .unwrap();
     let client = Client::new(router).with_token("x");
     assert_eq!(client.get("/api/me").await.status, 500);
@@ -155,12 +162,14 @@ async fn jwt_without_config_is_an_error() {
 #[tokio::test]
 async fn login_endpoint_moves_the_login_form() {
     let (_db, ctx) = setup().await;
-    let login = |auth: JwtAuth<users::Model>| {
+    let ctx = &ctx;
+    let login = |auth: JwtAuth<users::Model>| async move {
         let router = Admin::new(auth)
             .model::<users::Entity>()
-            .router(&ctx)
+            .router(ctx)
+            .await
             .unwrap();
-        async move { Client::new(router).get("/api/config").await.json()["login"].clone() }
+        Client::new(router).get("/api/config").await.json()["login"].clone()
     };
     let jwt = || JwtAuth::<users::Model>::new(|_| true);
 
@@ -204,6 +213,7 @@ async fn allow_all_only_mounts_in_development_and_test() {
         let router = Admin::new(AllowAll)
             .model::<users::Entity>()
             .router(&ctx)
+            .await
             .unwrap();
         let res = Client::new(router).get("/api/me").await;
         assert_eq!(res.status, 200, "{env:?}");
@@ -217,6 +227,7 @@ async fn allow_all_only_mounts_in_development_and_test() {
         let err = Admin::new(AllowAll)
             .model::<users::Entity>()
             .router(&ctx)
+            .await
             .expect_err("refuses to mount")
             .to_string();
         assert!(err.contains("AllowAll"), "{env:?}: {err}");
@@ -241,6 +252,7 @@ async fn allow_all_still_refuses_requests_where_it_cannot_mount() {
     let router = Admin::new(Wrapped)
         .model::<users::Entity>()
         .router(&ctx)
+        .await
         .unwrap();
     let res = Client::new(router).get("/api/me").await;
     assert_eq!(res.status, 403);
@@ -277,6 +289,7 @@ async fn custom_auth() {
         .model::<users::Entity>()
         .model::<posts::Entity>()
         .router(&ctx)
+        .await
         .unwrap();
     let client = Client::new(router);
     let ann = create_user(&db.db, "ann@example.com", true).await;

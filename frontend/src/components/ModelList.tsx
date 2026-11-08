@@ -6,6 +6,8 @@ import { display, encodeKeyPart, keyText } from "../format";
 import { paths } from "../paths";
 import type { AdminRecord, FieldMeta, Labels, ModelMeta } from "../types";
 import { ForeignKeyPicker } from "./ForeignKeyPicker";
+import { useCanManageRoles } from "../user";
+import { RoleSelect } from "./RoleSelect";
 import { Button, Card, ErrorBanner, Spinner, useToast } from "./ui";
 
 const NULL_FILTER = "__null__";
@@ -50,8 +52,15 @@ function FilterControl({
   onChange: (value: string) => void;
 }) {
   const id = `filter-${field.name}`;
+  const canManageRoles = useCanManageRoles();
   let control;
-  if (field.relation?.model) {
+  if (field.role && canManageRoles) {
+    control = (
+      <RoleSelect id={id} value={value} emptyLabel="All" onChange={onChange}>
+        <option value={NULL_FILTER}>No role</option>
+      </RoleSelect>
+    );
+  } else if (field.relation?.model) {
     control = (
       <ForeignKeyPicker
         id={id}
@@ -130,6 +139,9 @@ function Cell({
         {text}
       </Link>
     );
+  }
+  if (field.role && value !== null && value !== undefined) {
+    return <span>{labels[field.name]?.[keyText(value)] ?? text}</span>;
   }
   const relation = field.relation;
   if (relation?.model && value !== null && value !== undefined) {

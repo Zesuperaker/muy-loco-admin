@@ -91,6 +91,7 @@ app does not use Loco's JWT auth, implement `AdminAuth` (see [Authentication](#a
 - CSV export, streamed in primary-key order from one consistent snapshot; a download that
   stalls for `Admin::export_idle_timeout` (60 s) is stopped and its transaction rolled back
 - Composite and UUID primary keys, Postgres enums, JSON columns
+- [Roles](#roles), created and assigned in the UI, limit what each admin user can do
 - The React UI is embedded in the crate; nothing to build or serve separately
 
 ## Model options
@@ -121,7 +122,7 @@ app does not use Loco's JWT auth, implement `AdminAuth` (see [Authentication](#a
   any release build, the admin refuses to start.
 - For anything else, implement `AdminAuth` and return `AdminUser::new(id, name)`.
 
-Every admin user may do everything; what can be done to each model is set with `ModelAdmin`.
+Admin users without a [role](#roles) may do everything each model's `ModelAdmin` allows.
 
 API requests made by pages on other sites are refused (`Sec-Fetch-Site`), and mutating requests
 must send `X-Requested-With: muy-loco-admin`; the UI does both.
@@ -161,6 +162,51 @@ The admin refuses to mount when the login form could not work or would be unsafe
 (Loco's public development default is accepted only in a debug build in development or test,
 like `AllowAll`), a `__Host-` or `__Secure-` cookie without `Secure`, or a server-side store
 without Loco's `auth_session` middleware.
+
+## Roles
+
+A role grants, for each model, view, create, edit, delete and export, and each custom action,
+never more than the model's `ModelAdmin` allows. Admin users without a role have full access:
+they create and edit roles on the Roles page and give a user a role on the user's record. Models
+a role cannot view are hidden, and foreign keys to them are plain id fields; the role editor
+warns about these.
+
+To turn roles on, add `muy-loco-admin` to `migration/Cargo.toml` and its roles migration to the
+end of the list in `migration/src/lib.rs`:
+
+```rust
+fn migrations() -> Vec<Box<dyn MigrationTrait>> {
+    vec![
+        // ...the app's migrations
+        muy_loco_admin::migrations::roles("users"),
+        // inject-above (do not remove this comment)
+    ]
+}
+```
+
+It creates an `admin_roles` table and gives `users` a nullable `admin_role_id` column. Migrations
+generated later go after it, so `cargo loco db down` rolls back the newest first. Migrate and
+regenerate the entities:
+
+```sh
+cargo loco db migrate
+cargo loco db entities
+```
+
+Then tell `JwtAuth` the role column and the columns its check reads:
+
+```rust
+JwtAuth::<users::Model>::new(|user| user.is_admin == Some(true))
+    .roles(users::Column::AdminRoleId, [users::Column::IsAdmin])
+```
+
+Only admin users with full access may change those columns, so a user with a role cannot hand
+out access. A role that can edit users can still change their other columns, such as a full
+admin's email, so grant it only to people you would trust with those accounts; the role editor
+warns about this. A role cannot be deleted while users have it. Do not register the generated
+`admin_roles` entity as a model; the admin refuses to mount if you do. With your own `AdminAuth`,
+return `UserRoles` from `AdminAuth::roles` (requests from users with a role fail without it) and
+the user's role with `AdminUser::with_role`.
 
 ## Middleware
 
@@ -211,8 +257,8 @@ and branches are named `<type>/<topic>` (`feat/site-link`). After CI passes on `
 changelog; merging it tags the release and publishes the crate to crates.io. Below 1.0, `fix:`
 bumps the patch version, and `feat:` and breaking changes (`feat!:`) the minor.
 
-Dogfood logins (password `12341234`): `user1@example.com` (admin), `user2@example.com`
-(no admin access). The database is reseeded on every start; set `SEED_ON_START=false` to keep
+Dogfood logins (password `12341234`): `user1@example.com` (admin), `editor@example.com` (admin
+with the Editor role), `user2@example.com` (no admin access). The database is reseeded on every start; set `SEED_ON_START=false` to keep
 data. Run the dogfood Rust tests with `cargo test` in `dogfood/` against a Postgres at
 `DATABASE_URL` (default `postgres://loco:loco@localhost:5432/dogfood_test`).
 

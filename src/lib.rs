@@ -26,15 +26,26 @@ mod meta;
 mod model;
 mod query;
 mod resource;
+mod roles;
 mod session;
 mod task;
 mod value;
 
 pub use admin::{Admin, CONFIG_KEY};
 pub use api::{CSRF_HEADER, CSRF_VALUE};
-pub use auth::{AdminAuth, AdminUser, AllowAll, AuthError, FormLogin, LoginMethod};
+pub use auth::{AdminAuth, AdminUser, AllowAll, AuthError, FormLogin, LoginMethod, UserRoles};
 pub use error::{AdminError, FieldErrors};
 pub use meta::{FieldKind, SortDirection};
 pub use model::{ActionResult, ModelAdmin};
 pub use query::{MAX_PER_PAGE, NOT_NULL_FILTER, NULL_FILTER};
 pub use task::PromoteAdmin;
+
+/// The admin's migrations, to add to the app's `Migrator`.
+///
+/// Add each at the end of the list, above `inject-above`, so the list stays
+/// in the order the migrations ran and `cargo loco db down` rolls back the
+/// newest first. Later versions may add migrations here; add them the same
+/// way.
+pub mod migrations {
+    pub use crate::roles::migration as roles;
+}

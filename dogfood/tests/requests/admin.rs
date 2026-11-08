@@ -12,6 +12,7 @@ use serial_test::serial;
 
 const ADMIN: (&str, &str) = ("user1@example.com", "12341234");
 const NON_ADMIN: (&str, &str) = ("user2@example.com", "12341234");
+const EDITOR: (&str, &str) = ("editor@example.com", "12341234");
 const CSRF: (&str, &str) = ("x-requested-with", "muy-loco-admin");
 
 async fn login(request: &TestServer, (email, password): (&str, &str)) -> String {
@@ -241,6 +242,81 @@ async fn runs_actions_and_exports() {
             .await;
         assert_eq!(tag.status_code(), 200, "{}", tag.text());
         assert_eq!(tag.json::<Value>()["labels"]["tag_id"]["2"], "web");
+    })
+    .await;
+}
+
+#[tokio::test]
+#[serial]
+async fn roles_limit_admin_users() {
+    request::<App, _, _>(|request, ctx| async move {
+        seed::<App>(&ctx).await.unwrap();
+        let admin = login(&request, ADMIN).await;
+        let roles = request
+            .get("/admin/api/roles")
+            .authorization_bearer(&admin)
+            .await
+            .json::<Value>();
+        assert_eq!(roles["roles"][0]["name"], "Editor");
+        assert_eq!(roles["roles"][0]["users"], 1);
+
+        let editor = login(&request, EDITOR).await;
+        let me = request
+            .get("/admin/api/me")
+            .authorization_bearer(&editor)
+            .await
+            .json::<Value>();
+        assert_eq!(me["role"]["name"], "Editor");
+        assert_eq!(me["can_manage_roles"], false);
+        let schema = request
+            .get("/admin/api/schema")
+            .authorization_bearer(&editor)
+            .await
+            .json::<Value>();
+        let models: Vec<&str> = schema["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(models, ["articles", "categories", "tags", "article_tags"]);
+        let articles = &schema["models"][0];
+        assert_eq!(
+            articles["capabilities"],
+            json!({"view": true, "create": true, "update": true, "delete": false, "export": false})
+        );
+        let author = articles["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["name"] == "user_id")
+            .unwrap();
+        assert_eq!(author["relation"]["model"], Value::Null, "a plain id field");
+
+        let users = request
+            .get("/admin/api/models/users/records")
+            .authorization_bearer(&editor)
+            .await;
+        assert_eq!(users.status_code(), 403);
+        let deleted = request
+            .delete("/admin/api/models/articles/records/1")
+            .authorization_bearer(&editor)
+            .add_header(CSRF.0, CSRF.1)
+            .await;
+        assert_eq!(deleted.status_code(), 403);
+        let roles = request
+            .get("/admin/api/roles")
+            .authorization_bearer(&editor)
+            .await;
+        assert_eq!(roles.status_code(), 403);
+
+        // The role cannot be deleted while the editor has it.
+        let res = request
+            .delete("/admin/api/roles/1")
+            .authorization_bearer(&admin)
+            .add_header(CSRF.0, CSRF.1)
+            .await;
+        assert_eq!(res.status_code(), 409);
     })
     .await;
 }

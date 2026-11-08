@@ -1,6 +1,7 @@
 //! JSON API handlers.
 
 use std::{
+    borrow::Cow,
     collections::{BTreeMap, HashMap},
     sync::{
         Arc,
@@ -24,11 +25,12 @@ use serde::Deserialize;
 use serde_json::{Map, Value as JsonValue, json};
 
 use crate::{
-    auth::{AdminAuth, AdminUser, LoginMethod},
+    auth::{AdminAuth, AdminUser, LoginMethod, UserRoles},
     error::{AdminError, AdminResult},
-    meta::ModelMeta,
+    meta::{Capabilities, ModelMeta},
     query::{ListParams, MAX_PER_PAGE},
     resource::{CsvStream, Record, Resource},
+    roles::{self, Access, Role, RoleInput},
     session,
 };
 
@@ -55,6 +57,8 @@ pub(crate) struct Inner {
     pub export_idle_timeout: Duration,
     pub base_path: String,
     pub auth: Arc<dyn AdminAuth>,
+    /// Where users' roles are kept, when roles are on.
+    pub roles: Option<UserRoles>,
     pub models: Vec<Model>,
     pub ctx: AppContext,
 }
@@ -82,12 +86,17 @@ impl AdminState {
     }
 
     /// Resolve `name`, checking that its [`ModelAdmin`](crate::ModelAdmin)
-    /// allows `operation`. Every signed-in admin user may do the same.
-    fn authorize(&self, name: &str, operation: Operation<'_>) -> AdminResult<&Model> {
+    /// allows `operation`, and so does the user's role if they have one.
+    fn authorize(
+        &self,
+        access: &Access,
+        name: &str,
+        operation: Operation<'_>,
+    ) -> AdminResult<&Model> {
         let model = self.model(name).ok_or(AdminError::NotFound)?;
-        let caps = model.meta.capabilities;
+        let caps = access.capabilities(&model.meta);
         let capable = match operation {
-            Operation::View => true,
+            Operation::View => caps.view,
             Operation::Create => caps.create,
             Operation::Update => caps.update,
             Operation::Delete => caps.delete,
@@ -96,13 +105,78 @@ impl AdminState {
                 if !model.meta.actions.iter().any(|a| a.name == action) {
                     return Err(AdminError::NotFound);
                 }
-                true
+                access.can_run(&model.meta, action)
             }
         };
         if !capable {
             return Err(AdminError::Forbidden);
         }
         Ok(model)
+    }
+
+    /// Fields of `model` the user may not set although the model allows it:
+    /// for a user with a role, the users' role column and the other columns
+    /// that decide who may use the admin.
+    fn locked(&self, model: &Model, access: &Access) -> Vec<String> {
+        match &self.0.roles {
+            Some(roles) if !access.is_full() && roles.table == model.meta.table => {
+                std::iter::once(&roles.column)
+                    .chain(&roles.protected)
+                    .cloned()
+                    .collect()
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// `model` as the user sees it, or `None` if they may not view it: with
+    /// a role, its capabilities and actions are narrowed, locked fields are
+    /// read-only, and links to models the role cannot view are dropped, so
+    /// foreign keys to them are edited as plain values.
+    fn visible<'a>(&self, model: &'a Model, access: &Access) -> Option<Cow<'a, ModelMeta>> {
+        if access.is_full() {
+            return Some(Cow::Borrowed(&model.meta));
+        }
+        let caps = access.capabilities(&model.meta);
+        if !caps.view {
+            return None;
+        }
+        let viewable = |name: &str| self.model(name).is_some_and(|m| access.can_view(&m.meta));
+        let locked = self.locked(model, access);
+        let mut meta = model.meta.clone();
+        for field in &mut meta.fields {
+            if locked.contains(&field.name) {
+                field.readonly = true;
+            }
+            if let Some(rel) = &mut field.relation
+                && rel.model.as_deref().is_some_and(|target| !viewable(target))
+            {
+                rel.model = None;
+            }
+        }
+        meta.related.retain(|rel| viewable(&rel.model));
+        meta.actions
+            .retain(|action| access.can_run(&model.meta, &action.name));
+        let editable = meta.fields.iter().any(|f| !f.readonly && !f.primary_key);
+        meta.capabilities = Capabilities {
+            update: caps.update && editable,
+            ..caps
+        };
+        Some(Cow::Owned(meta))
+    }
+
+    /// The users' role settings, if the user may manage roles: roles are on
+    /// and the user has full access.
+    fn role_admin(&self, access: &Access) -> AdminResult<&UserRoles> {
+        let roles = self.0.roles.as_ref().ok_or(AdminError::NotFound)?;
+        if !access.is_full() {
+            return Err(AdminError::Forbidden);
+        }
+        Ok(roles)
+    }
+
+    fn metas(&self) -> Vec<&ModelMeta> {
+        self.0.models.iter().map(|m| &m.meta).collect()
     }
 }
 
@@ -137,17 +211,37 @@ async fn guard(request: Request, next: Next) -> Response {
     }
 }
 
-/// The authenticated admin user of a request. Every handler but `config`
-/// and `sign_out` takes it, so they refuse requests that fail to
-/// authenticate.
-pub(crate) struct Authed(pub AdminUser);
+/// The authenticated admin user of a request and what they may do. Every
+/// handler but `config` and `sign_out` takes it, so they refuse requests that
+/// fail to authenticate.
+pub(crate) struct Authed {
+    pub user: AdminUser,
+    pub access: Access,
+}
 
 impl FromRequestParts<AdminState> for Authed {
     type Rejection = AdminError;
 
     async fn from_request_parts(parts: &mut Parts, state: &AdminState) -> AdminResult<Self> {
         let user = state.0.auth.authenticate(&state.0.ctx, parts).await?;
-        Ok(Self(user))
+        let access = match user.role {
+            None => Access::Full,
+            // Without `AdminAuth::roles` the admin does not know the role
+            // column, so nothing would stop the user from changing their own
+            // role.
+            Some(_) if state.0.roles.is_none() => {
+                return Err(AdminError::Internal(
+                    "the user has a role, but `AdminAuth::roles` returns `None`".to_string(),
+                ));
+            }
+            // A role that no longer exists grants nothing.
+            Some(id) => Access::Role(
+                roles::find(&state.0.ctx.db, id)
+                    .await?
+                    .ok_or(AdminError::Forbidden)?,
+            ),
+        };
+        Ok(Self { user, access })
     }
 }
 
@@ -215,6 +309,14 @@ pub(crate) fn router() -> Router<AdminState> {
         .route("/models/{model}/actions/{action}", post(run_action))
         .route("/models/{model}/export", get(export))
         .route("/models/{model}/lookup", get(lookup))
+        .route("/roles", get(list_roles).post(create_role))
+        .route(
+            "/roles/{id}",
+            get(show_role)
+                .patch(update_role)
+                .put(update_role)
+                .delete(delete_role),
+        )
         .route("/session", post(sign_in).delete(sign_out))
         .fallback(|| async { AdminError::NotFound })
         .layer(from_fn(guard))
@@ -229,8 +331,23 @@ async fn config(State(state): State<AdminState>) -> Json<JsonValue> {
     }))
 }
 
-async fn me(Authed(user): Authed) -> Json<JsonValue> {
-    Json(json!({ "id": user.id, "name": user.name }))
+/// The user as the UI shows them: their role, and whether they may manage
+/// roles.
+fn user_json(state: &AdminState, authed: &Authed) -> JsonValue {
+    let role = match &authed.access {
+        Access::Full => JsonValue::Null,
+        Access::Role(role) => json!({ "id": role.id, "name": role.name }),
+    };
+    json!({
+        "id": authed.user.id,
+        "name": authed.user.name,
+        "role": role,
+        "can_manage_roles": state.0.roles.is_some() && authed.access.is_full(),
+    })
+}
+
+async fn me(State(state): State<AdminState>, authed: Authed) -> Json<JsonValue> {
+    Json(user_json(&state, &authed))
 }
 
 /// Start a session for the user the request authenticates as: the login form
@@ -244,12 +361,12 @@ async fn sign_in(
     if !matches!(state.0.auth.login(), LoginMethod::Form(_)) {
         return Err(AdminError::NotFound);
     }
-    let Authed(user) = authed?;
+    let authed = authed?;
     // Mounting checked that sessions can be trusted.
     let session = session.ok_or_else(|| AdminError::Internal("sessions unavailable".into()))?;
     // A fresh session, so one planted before sign-in is worth nothing.
-    let session = session.renew().set_user_id(user.id.clone());
-    Ok((session, Json(json!({ "id": user.id, "name": user.name }))).into_response())
+    let session = session.renew().set_user_id(authed.user.id.clone());
+    Ok((session, Json(user_json(&state, &authed))).into_response())
 }
 
 /// End the request's session. It is the app's session too, so this signs the
@@ -261,14 +378,25 @@ async fn sign_out(LocoSession(session): LocoSession) -> Response {
     }
 }
 
-async fn schema(State(state): State<AdminState>, _: Authed) -> Json<JsonValue> {
-    let models: Vec<&ModelMeta> = state.0.models.iter().map(|m| &m.meta).collect();
+async fn schema(State(state): State<AdminState>, Authed { access, .. }: Authed) -> Json<JsonValue> {
+    let models: Vec<Cow<'_, ModelMeta>> = state
+        .0
+        .models
+        .iter()
+        .filter_map(|m| state.visible(m, &access))
+        .collect();
     Json(json!({ "models": models }))
 }
 
-async fn stats(State(state): State<AdminState>, _: Authed) -> AdminResult<Json<JsonValue>> {
+async fn stats(
+    State(state): State<AdminState>,
+    Authed { access, .. }: Authed,
+) -> AdminResult<Json<JsonValue>> {
     let mut counts = BTreeMap::new();
     for model in &state.0.models {
+        if !access.can_view(&model.meta) {
+            continue;
+        }
         let count = model.resource.count(&state.0.ctx.db).await?;
         counts.insert(model.meta.name.clone(), count);
     }
@@ -276,14 +404,39 @@ async fn stats(State(state): State<AdminState>, _: Authed) -> AdminResult<Json<J
 }
 
 /// Labels of the records that foreign keys in `records` point at, keyed by
-/// field name, then by the foreign-key value as text.
+/// field name, then by the foreign-key value as text: role names for the
+/// role column, and labels from the models the user may view.
 async fn fk_labels(
     state: &AdminState,
     model: &Model,
+    access: &Access,
     records: &[&Record],
 ) -> AdminResult<BTreeMap<String, BTreeMap<String, String>>> {
     let mut out = BTreeMap::new();
     for field in &model.meta.fields {
+        let values = || {
+            records
+                .iter()
+                .filter_map(|r| r.values.get(&field.name))
+                .filter(|v| !v.is_null())
+        };
+        if field.role {
+            let ids: Vec<i64> = values()
+                .filter_map(|v| v.as_i64().or_else(|| v.as_str()?.parse().ok()))
+                .collect();
+            if ids.is_empty() {
+                continue;
+            }
+            let names = roles::names(&state.0.ctx.db, ids).await?;
+            out.insert(
+                field.name.clone(),
+                names
+                    .into_iter()
+                    .map(|(id, name)| (id.to_string(), name))
+                    .collect(),
+            );
+            continue;
+        }
         let Some(rel) = &field.relation else { continue };
         let Some(target_name) = rel.model.as_deref() else {
             continue;
@@ -291,11 +444,10 @@ async fn fk_labels(
         let Some(target) = state.model(target_name) else {
             continue;
         };
-        let values: Vec<JsonValue> = records
-            .iter()
-            .filter_map(|r| r.values.get(&field.name).cloned())
-            .filter(|v| !v.is_null())
-            .collect();
+        if !access.can_view(&target.meta) {
+            continue;
+        }
+        let values: Vec<JsonValue> = values().cloned().collect();
         if values.is_empty() {
             continue;
         }
@@ -310,15 +462,15 @@ async fn fk_labels(
 
 async fn list(
     State(state): State<AdminState>,
-    _: Authed,
+    Authed { access, .. }: Authed,
     Path(name): Path<String>,
     Query(query): Query<HashMap<String, String>>,
 ) -> AdminResult<Json<JsonValue>> {
-    let model = state.authorize(&name, Operation::View)?;
+    let model = state.authorize(&access, &name, Operation::View)?;
     let params = ListParams::from_query(&query)?;
     let page = model.resource.list(&state.0.ctx.db, &params).await?;
     let records: Vec<&Record> = page.records.iter().collect();
-    let labels = fk_labels(&state, model, &records).await?;
+    let labels = fk_labels(&state, model, &access, &records).await?;
     let mut out = serde_json::to_value(&page).map_err(|e| AdminError::Internal(e.to_string()))?;
     out["labels"] = json!(labels);
     Ok(Json(out))
@@ -327,65 +479,73 @@ async fn list(
 async fn record_response(
     state: &AdminState,
     model: &Model,
+    access: &Access,
     record: &Record,
 ) -> AdminResult<Json<JsonValue>> {
-    let labels = fk_labels(state, model, &[record]).await?;
+    let labels = fk_labels(state, model, access, &[record]).await?;
     Ok(Json(json!({ "record": record, "labels": labels })))
 }
 
 async fn show(
     State(state): State<AdminState>,
-    _: Authed,
+    Authed { access, .. }: Authed,
     Path((name, key)): Path<(String, String)>,
 ) -> AdminResult<Json<JsonValue>> {
-    let model = state.authorize(&name, Operation::View)?;
+    let model = state.authorize(&access, &name, Operation::View)?;
     let record = model.resource.get(&state.0.ctx.db, &key).await?;
-    record_response(&state, model, &record).await
+    record_response(&state, model, &access, &record).await
 }
 
 async fn create(
     State(state): State<AdminState>,
-    _: Authed,
+    Authed { access, .. }: Authed,
     Path(name): Path<String>,
     input: Result<Json<Map<String, JsonValue>>, JsonRejection>,
 ) -> AdminResult<Response> {
-    let model = state.authorize(&name, Operation::Create)?;
-    let record = model.resource.create(&state.0.ctx.db, body(input)?).await?;
-    let json = record_response(&state, model, &record).await?;
+    let model = state.authorize(&access, &name, Operation::Create)?;
+    let input = body(input)?;
+    let locked = state.locked(model, &access);
+    let record = model
+        .resource
+        .create(&state.0.ctx.db, input, &locked)
+        .await?;
+    let json = record_response(&state, model, &access, &record).await?;
     Ok((StatusCode::CREATED, json).into_response())
 }
 
 async fn update(
     State(state): State<AdminState>,
-    _: Authed,
+    Authed { access, .. }: Authed,
     Path((name, key)): Path<(String, String)>,
     input: Result<Json<Map<String, JsonValue>>, JsonRejection>,
 ) -> AdminResult<Json<JsonValue>> {
-    let model = state.authorize(&name, Operation::Update)?;
+    let model = state.authorize(&access, &name, Operation::Update)?;
+    let input = body(input)?;
+    let locked = state.locked(model, &access);
     let record = model
         .resource
-        .update(&state.0.ctx.db, &key, body(input)?)
+        .update(&state.0.ctx.db, &key, input, &locked)
         .await?;
-    record_response(&state, model, &record).await
+    record_response(&state, model, &access, &record).await
 }
 
 async fn destroy(
     State(state): State<AdminState>,
-    _: Authed,
+    Authed { access, .. }: Authed,
     Path((name, key)): Path<(String, String)>,
 ) -> AdminResult<Json<JsonValue>> {
-    let model = state.authorize(&name, Operation::Delete)?;
+    let model = state.authorize(&access, &name, Operation::Delete)?;
     let deleted = model.resource.delete(&state.0.ctx.db, &[key]).await?;
     Ok(Json(json!({ "deleted": deleted })))
 }
 
 async fn bulk_delete(
     State(state): State<AdminState>,
-    _: Authed,
+    Authed { access, .. }: Authed,
     Path(name): Path<String>,
     input: Result<Json<KeysBody>, JsonRejection>,
 ) -> AdminResult<Json<JsonValue>> {
-    let model = state.authorize(&name, Operation::Delete)?;
+    let model = state.authorize(&access, &name, Operation::Delete)?;
     let deleted = model
         .resource
         .delete(&state.0.ctx.db, &keys(input)?)
@@ -395,11 +555,11 @@ async fn bulk_delete(
 
 async fn run_action(
     State(state): State<AdminState>,
-    _: Authed,
+    Authed { access, .. }: Authed,
     Path((name, action)): Path<(String, String)>,
     input: Result<Json<KeysBody>, JsonRejection>,
 ) -> AdminResult<Json<JsonValue>> {
-    let model = state.authorize(&name, Operation::Action(&action))?;
+    let model = state.authorize(&access, &name, Operation::Action(&action))?;
     let message = model
         .resource
         .run_action(&state.0.ctx, &action, &keys(input)?)
@@ -409,11 +569,11 @@ async fn run_action(
 
 async fn export(
     State(state): State<AdminState>,
-    _: Authed,
+    Authed { access, .. }: Authed,
     Path(name): Path<String>,
     Query(query): Query<HashMap<String, String>>,
 ) -> AdminResult<Response> {
-    let model = state.authorize(&name, Operation::Export)?;
+    let model = state.authorize(&access, &name, Operation::Export)?;
     let params = ListParams::from_query(&query)?;
     let idle = state.0.export_idle_timeout;
     let csv = Arc::clone(&model.resource)
@@ -493,11 +653,11 @@ pub(crate) struct LookupQuery {
 
 async fn lookup(
     State(state): State<AdminState>,
-    _: Authed,
+    Authed { access, .. }: Authed,
     Path(name): Path<String>,
     Query(query): Query<LookupQuery>,
 ) -> AdminResult<Json<JsonValue>> {
-    let model = state.authorize(&name, Operation::View)?;
+    let model = state.authorize(&access, &name, Operation::View)?;
     let limit = query
         .limit
         .unwrap_or(LOOKUP_LIMIT)
@@ -512,4 +672,92 @@ async fn lookup(
         )
         .await?;
     Ok(Json(json!({ "choices": choices })))
+}
+
+fn role_json(role: &Role, users: u64) -> JsonValue {
+    json!({
+        "id": role.id,
+        "name": role.name,
+        "permissions": role.permissions,
+        "users": users,
+    })
+}
+
+/// A role id from the URL; anything else names no role.
+fn role_id(id: &str) -> AdminResult<i64> {
+    id.parse().map_err(|_| AdminError::NotFound)
+}
+
+fn role_input(input: Result<Json<RoleInput>, JsonRejection>) -> AdminResult<RoleInput> {
+    input.map(|Json(input)| input).map_err(|e| rejection(&e))
+}
+
+async fn list_roles(
+    State(state): State<AdminState>,
+    Authed { access, .. }: Authed,
+) -> AdminResult<Json<JsonValue>> {
+    let users = state.role_admin(&access)?;
+    let db = &state.0.ctx.db;
+    let counts = roles::assigned(db, users, None).await?;
+    let list: Vec<JsonValue> = roles::all(db)
+        .await?
+        .iter()
+        .map(|role| role_json(role, counts.get(&role.id).copied().unwrap_or(0)))
+        .collect();
+    Ok(Json(json!({ "roles": list })))
+}
+
+async fn show_role(
+    State(state): State<AdminState>,
+    Authed { access, .. }: Authed,
+    Path(id): Path<String>,
+) -> AdminResult<Json<JsonValue>> {
+    let users = state.role_admin(&access)?;
+    let id = role_id(&id)?;
+    let db = &state.0.ctx.db;
+    let role = roles::find(db, id).await?.ok_or(AdminError::NotFound)?;
+    let count = roles::assigned(db, users, Some(id)).await?;
+    Ok(Json(
+        json!({ "role": role_json(&role, count.get(&id).copied().unwrap_or(0)) }),
+    ))
+}
+
+async fn create_role(
+    State(state): State<AdminState>,
+    Authed { access, .. }: Authed,
+    input: Result<Json<RoleInput>, JsonRejection>,
+) -> AdminResult<Response> {
+    state.role_admin(&access)?;
+    let role = roles::create(&state.0.ctx.db, &state.metas(), role_input(input)?).await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({ "role": role_json(&role, 0) })),
+    )
+        .into_response())
+}
+
+async fn update_role(
+    State(state): State<AdminState>,
+    Authed { access, .. }: Authed,
+    Path(id): Path<String>,
+    input: Result<Json<RoleInput>, JsonRejection>,
+) -> AdminResult<Json<JsonValue>> {
+    let users = state.role_admin(&access)?;
+    let id = role_id(&id)?;
+    let db = &state.0.ctx.db;
+    let role = roles::update(db, &state.metas(), id, role_input(input)?).await?;
+    let count = roles::assigned(db, users, Some(id)).await?;
+    Ok(Json(
+        json!({ "role": role_json(&role, count.get(&id).copied().unwrap_or(0)) }),
+    ))
+}
+
+async fn delete_role(
+    State(state): State<AdminState>,
+    Authed { access, .. }: Authed,
+    Path(id): Path<String>,
+) -> AdminResult<Json<JsonValue>> {
+    let users = state.role_admin(&access)?;
+    roles::delete(&state.0.ctx.db, users, role_id(&id)?).await?;
+    Ok(Json(json!({ "deleted": 1 })))
 }

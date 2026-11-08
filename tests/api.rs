@@ -55,7 +55,7 @@ fn admin() -> Admin {
 
 async fn client() -> (TestDb, AppContext, Client) {
     let (db, ctx) = setup().await;
-    let router = admin().router(&ctx).expect("router");
+    let router = admin().router(&ctx).await.expect("router");
     (db, ctx, Client::new(router))
 }
 
@@ -111,7 +111,10 @@ async fn config_is_public() {
 async fn me_returns_the_user() {
     let (_db, _ctx, client) = client().await;
     let body = client.get("/api/me").await.json();
-    assert_eq!(body, json!({"id": "anonymous", "name": "Anonymous"}));
+    assert_eq!(
+        body,
+        json!({"id": "anonymous", "name": "Anonymous", "role": null, "can_manage_roles": false})
+    );
 }
 
 #[tokio::test]
@@ -238,6 +241,7 @@ async fn fields_put_the_key_first_and_timestamps_last() {
             "email",
             "name",
             "is_admin",
+            "admin_role_id",
             "created_at",
             "updated_at"
         ]
@@ -1034,7 +1038,7 @@ async fn invalid_model_configuration_fails_at_mount() {
         (Admin::new(AllowAll).path("/"), "must start with `/`"),
     ];
     for (admin, expected) in cases {
-        let err = admin.router(&ctx).expect_err("configuration error");
+        let err = admin.router(&ctx).await.expect_err("configuration error");
         assert!(
             err.to_string().contains(expected),
             "{err} should contain {expected}"
@@ -1060,6 +1064,7 @@ async fn custom_configuration_is_applied() {
                 .can_export(true),
         )
         .router(&ctx)
+        .await
         .unwrap();
     let client = Client::new(router);
     let ann = create_user(&db.db, "ann@example.com", true).await;
@@ -1184,6 +1189,7 @@ async fn lookup_finds_records_by_key() {
         )
         .model::<posts::Entity>()
         .router(&ctx)
+        .await
         .unwrap();
     let client = Client::new(router);
     let user = create_user(&db.db, "ann@example.com", true).await;

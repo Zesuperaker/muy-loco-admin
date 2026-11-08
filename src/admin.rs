@@ -21,10 +21,11 @@ use serde::Deserialize;
 use crate::{
     api::{self, AdminState, Inner, Model},
     assets,
-    auth::{AdminAuth, LoginMethod},
-    meta::RelatedMeta,
+    auth::{AdminAuth, LoginMethod, UserRoles},
+    meta::{ModelMeta, RelatedMeta},
     model::ModelAdmin,
     resource::{ModelResource, Resource},
+    roles::{self, ROLES_TABLE},
     session,
 };
 
@@ -257,8 +258,23 @@ impl Admin {
     /// Build the admin router, to be nested at [`Admin::mount_path`].
     ///
     /// The initializer does this for you; use it to mount the admin by hand.
-    pub fn router(&self, ctx: &AppContext) -> loco_rs::Result<Router> {
-        self.build(ctx, &Settings::default())
+    /// Like the initializer, it checks the database, so it fails when roles
+    /// are on and their migration has not run.
+    pub async fn router(&self, ctx: &AppContext) -> loco_rs::Result<Router> {
+        let router = self.build(ctx, &Settings::default())?;
+        self.check_database(ctx).await?;
+        Ok(router)
+    }
+
+    /// Check that the database has what the admin needs: with roles on, the
+    /// roles table and the users' role column.
+    async fn check_database(&self, ctx: &AppContext) -> loco_rs::Result<()> {
+        match self.auth.roles() {
+            Some(users) => roles::check_tables(&ctx.db, &users)
+                .await
+                .map_err(|e| Error::string(&e)),
+            None => Ok(()),
+        }
     }
 
     /// The validated mount path.
@@ -266,23 +282,22 @@ impl Admin {
         validate_path(&self.path).map_err(|e| Error::string(&e))
     }
 
-    /// Build the router, with `settings` from the Loco config taking
-    /// precedence over the builder's values.
-    fn build(&self, ctx: &AppContext, settings: &Settings) -> loco_rs::Result<Router> {
-        if !self.errors.is_empty() {
-            return Err(Error::string(&self.errors.join("; ")));
-        }
-        self.auth.check(ctx)?;
-        let path = settings.path.as_deref().unwrap_or(&self.path);
-        let base_path = validate_path(path).map_err(|e| Error::string(&e))?;
-        let title = settings.title.as_deref().unwrap_or(&self.title);
-        let site_url = validate_site_url(settings.site_url.as_deref().unwrap_or(&self.site_url))
-            .map_err(|e| Error::string(&e))?;
-
+    /// The registered models' metadata, with relations resolved against
+    /// each other and the users' role column marked.
+    fn metas(&self, user_roles: Option<&UserRoles>) -> loco_rs::Result<Vec<ModelMeta>> {
         let mut tables: HashMap<String, String> = HashMap::new();
         let mut names = std::collections::HashSet::new();
         for resource in &self.resources {
             let meta = resource.meta();
+            if user_roles.is_some() && meta.table == ROLES_TABLE {
+                // Roles would be editable by anyone allowed to edit the
+                // model, including users limited by a role.
+                return Err(Error::string(&format!(
+                    "model `{}`: the `{ROLES_TABLE}` table is managed on the admin's Roles \
+                     page and cannot be registered",
+                    meta.name
+                )));
+            }
             if !names.insert(meta.name.clone()) {
                 return Err(Error::string(&format!(
                     "model `{}` is registered more than once",
@@ -296,7 +311,13 @@ impl Admin {
 
         let mut metas: Vec<_> = self.resources.iter().map(|r| r.meta().clone()).collect();
         for meta in &mut metas {
+            let users = user_roles.filter(|r| r.table == meta.table);
             for field in &mut meta.fields {
+                if users.is_some_and(|r| r.column == field.name) {
+                    // Picked from the roles, not a linked model.
+                    field.role = true;
+                    field.relation = None;
+                }
                 if let Some(rel) = &mut field.relation {
                     rel.model = tables.get(&rel.table).cloned();
                 }
@@ -323,6 +344,25 @@ impl Admin {
             }
         }
 
+        Ok(metas)
+    }
+
+    /// Build the router, with `settings` from the Loco config taking
+    /// precedence over the builder's values.
+    fn build(&self, ctx: &AppContext, settings: &Settings) -> loco_rs::Result<Router> {
+        if !self.errors.is_empty() {
+            return Err(Error::string(&self.errors.join("; ")));
+        }
+        self.auth.check(ctx)?;
+        let user_roles = self.auth.roles();
+        let path = settings.path.as_deref().unwrap_or(&self.path);
+        let base_path = validate_path(path).map_err(|e| Error::string(&e))?;
+        let title = settings.title.as_deref().unwrap_or(&self.title);
+        let site_url = validate_site_url(settings.site_url.as_deref().unwrap_or(&self.site_url))
+            .map_err(|e| Error::string(&e))?;
+
+        let metas = self.metas(user_roles.as_ref())?;
+
         let models = self
             .resources
             .iter()
@@ -338,6 +378,7 @@ impl Admin {
             export_idle_timeout: self.export_idle_timeout,
             base_path,
             auth: Arc::clone(&self.auth),
+            roles: user_roles,
             models,
             ctx: ctx.clone(),
         }));
@@ -390,6 +431,7 @@ impl Initializer for Admin {
             return Ok(router);
         }
         let admin = self.build(ctx, &settings)?;
+        self.check_database(ctx).await?;
         let path = settings.path.as_deref().unwrap_or(&self.path);
         let mount = validate_path(path).map_err(|e| Error::string(&e))?;
         tracing::info!(path = %mount, models = self.resources.len(), "admin mounted");

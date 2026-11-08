@@ -16,7 +16,7 @@ use std::path::Path;
 #[allow(unused_imports)]
 use crate::{
     admin, controllers, initializers,
-    models::_entities::{article_tags, articles, categories, tags, users},
+    models::_entities::{admin_roles, article_tags, articles, categories, tags, users},
     tasks,
     workers::downloader::DownloadWorker,
 };
@@ -79,10 +79,12 @@ impl Hooks for App {
         truncate_table(&ctx.db, tags::Entity).await?;
         truncate_table(&ctx.db, categories::Entity).await?;
         truncate_table(&ctx.db, users::Entity).await?;
+        truncate_table(&ctx.db, admin_roles::Entity).await?;
         Ok(())
     }
     async fn seed(ctx: &AppContext, base: &Path) -> Result<()> {
         let path = |name: &str| base.join(name).display().to_string();
+        db::seed::<admin_roles::ActiveModel>(&ctx.db, &path("admin_roles.yaml")).await?;
         db::seed::<users::ActiveModel>(&ctx.db, &path("users.yaml")).await?;
         db::seed::<categories::ActiveModel>(&ctx.db, &path("categories.yaml")).await?;
         db::seed::<tags::ActiveModel>(&ctx.db, &path("tags.yaml")).await?;

@@ -20,6 +20,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261105_005124_articles::Migration),
             Box::new(m20261105_010000_tags::Migration),
             Box::new(m20261105_010100_article_tags::Migration),
+            muy_loco_admin::migrations::roles("users"),
             // inject-above (do not remove this comment)
         ]
     }

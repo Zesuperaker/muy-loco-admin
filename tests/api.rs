@@ -55,7 +55,7 @@ fn admin() -> Admin {
 
 async fn client() -> (TestDb, AppContext, Client) {
     let (db, ctx) = setup().await;
-    let router = admin().router(&ctx).expect("router");
+    let router = admin().router(&ctx).await.expect("router");
     (db, ctx, Client::new(router))
 }
 
@@ -1038,7 +1038,7 @@ async fn invalid_model_configuration_fails_at_mount() {
         (Admin::new(AllowAll).path("/"), "must start with `/`"),
     ];
     for (admin, expected) in cases {
-        let err = admin.router(&ctx).expect_err("configuration error");
+        let err = admin.router(&ctx).await.expect_err("configuration error");
         assert!(
             err.to_string().contains(expected),
             "{err} should contain {expected}"
@@ -1064,6 +1064,7 @@ async fn custom_configuration_is_applied() {
                 .can_export(true),
         )
         .router(&ctx)
+        .await
         .unwrap();
     let client = Client::new(router);
     let ann = create_user(&db.db, "ann@example.com", true).await;
@@ -1188,6 +1189,7 @@ async fn lookup_finds_records_by_key() {
         )
         .model::<posts::Entity>()
         .router(&ctx)
+        .await
         .unwrap();
     let client = Client::new(router);
     let user = create_user(&db.db, "ann@example.com", true).await;

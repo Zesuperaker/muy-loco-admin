@@ -170,7 +170,7 @@ async fn router_can_be_mounted_by_hand() {
     let ctx = context(&test_db, Environment::Test, &json!({}));
     let admin = admin().path("/ops/admin").title("Ops").site_url("/home");
     let path = admin.mount_path().unwrap();
-    let router = Router::new().nest(&path, admin.router(&ctx).unwrap());
+    let router = Router::new().nest(&path, admin.router(&ctx).await.unwrap());
     let res = Client::new(router).get("/ops/admin/api/config").await;
     assert_eq!(res.json()["title"], "Ops");
     assert_eq!(res.json()["base_path"], "/ops/admin");

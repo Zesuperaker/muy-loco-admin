@@ -52,7 +52,7 @@ struct World {
 
 async fn world() -> World {
     let (db, ctx) = setup().await;
-    let router = admin(auth()).router(&ctx).expect("router");
+    let router = admin(auth()).router(&ctx).await.expect("router");
     let owner = create_user(&db.db, "owner@example.com", true).await;
     let full = Client::new(router.clone()).with_token(token(&owner));
     World {
@@ -548,6 +548,7 @@ async fn missing_and_unreadable_roles_grant_nothing() {
     let missing = Client::new(
         admin(Fixed(Some(999), Some(user_roles())))
             .router(&ctx)
+            .await
             .unwrap(),
     );
     assert_eq!(missing.get("/api/me").await.status, 403);
@@ -557,6 +558,7 @@ async fn missing_and_unreadable_roles_grant_nothing() {
     let client = Client::new(
         admin(Fixed(Some(broken), Some(user_roles())))
             .router(&ctx)
+            .await
             .unwrap(),
     );
     assert_eq!(
@@ -566,7 +568,12 @@ async fn missing_and_unreadable_roles_grant_nothing() {
     assert_eq!(client.get("/api/roles").await.status, 403);
 
     // Full admins can still list, fix and delete it.
-    let full = Client::new(admin(Fixed(None, Some(user_roles()))).router(&ctx).unwrap());
+    let full = Client::new(
+        admin(Fixed(None, Some(user_roles())))
+            .router(&ctx)
+            .await
+            .unwrap(),
+    );
     let res = full.get("/api/roles").await;
     assert_eq!(res.status, 200, "{}", res.text());
     assert_eq!(
@@ -633,7 +640,7 @@ async fn a_role_needs_the_auth_to_keep_roles() {
     // The auth hands out a role but never says where roles are kept, so the
     // admin cannot protect the role column: it refuses rather than let the
     // user change their own role.
-    let client = Client::new(admin(Fixed(Some(editor), None)).router(&ctx).unwrap());
+    let client = Client::new(admin(Fixed(Some(editor), None)).router(&ctx).await.unwrap());
     assert_eq!(client.get("/api/me").await.status, 500);
     let res = client
         .patch(
@@ -643,14 +650,14 @@ async fn a_role_needs_the_auth_to_keep_roles() {
         .await;
     assert_eq!(res.status, 500);
     // Users without a role are unaffected.
-    let full = Client::new(admin(Fixed(None, None)).router(&ctx).unwrap());
+    let full = Client::new(admin(Fixed(None, None)).router(&ctx).await.unwrap());
     assert_eq!(full.get("/api/me").await.status, 200);
 }
 
 #[tokio::test]
 async fn roles_are_off_unless_the_auth_keeps_them() {
     let (_db, ctx) = setup().await;
-    let client = Client::new(admin(AllowAll).router(&ctx).unwrap());
+    let client = Client::new(admin(AllowAll).router(&ctx).await.unwrap());
     assert_eq!(client.get("/api/roles").await.status, 404);
     assert_eq!(
         client.post("/api/roles", json!({"name": "x"})).await.status,
@@ -689,10 +696,9 @@ async fn mounting_checks_the_roles_tables() {
             .contains("add `muy_loco_admin::migrations::roles(\"users\")` to the app's `Migrator`"),
         "{err}"
     );
-    // Mounting by hand cannot check, so the app asks.
-    assert!(admin(custom()).router(&ctx).is_ok());
+    // Mounting by hand checks too.
     let err = admin(custom())
-        .check_database(&ctx)
+        .router(&ctx)
         .await
         .expect_err("missing tables");
     assert!(
@@ -700,7 +706,7 @@ async fn mounting_checks_the_roles_tables() {
             .contains("roles need the `admin_roles` table"),
         "{err}"
     );
-    assert!(admin(AllowAll).check_database(&ctx).await.is_ok());
+    assert!(admin(AllowAll).router(&ctx).await.is_ok());
     // Without roles, nothing is checked.
     assert!(
         admin(AllowAll)
@@ -772,13 +778,14 @@ async fn misconfigured_roles_fail_at_mount() {
     // The role column must be the migration's nullable bigint column.
     let wrong = JwtAuth::<users::Model>::new(|user| user.is_admin)
         .roles(users::Column::Id, [users::Column::IsAdmin]);
-    let err = admin(wrong).router(&ctx).expect_err("wrong column");
+    let err = admin(wrong).router(&ctx).await.expect_err("wrong column");
     assert!(err.to_string().contains("the role column `id`"), "{err}");
 
     // The roles table is managed on the Roles page, never as a model.
     let err = admin(auth())
         .model::<admin_roles::Entity>()
         .router(&ctx)
+        .await
         .expect_err("roles registered");
     assert!(
         err.to_string()
@@ -790,6 +797,7 @@ async fn misconfigured_roles_fail_at_mount() {
         admin(AllowAll)
             .model::<admin_roles::Entity>()
             .router(&ctx)
+            .await
             .is_ok()
     );
 }

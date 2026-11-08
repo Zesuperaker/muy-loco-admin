@@ -258,21 +258,17 @@ impl Admin {
     /// Build the admin router, to be nested at [`Admin::mount_path`].
     ///
     /// The initializer does this for you; use it to mount the admin by hand.
-    /// Unlike the initializer, it does not check the database: with roles
-    /// on, call [`Admin::check_database`] too, or a missing roles table only
-    /// shows up as failing requests.
-    pub fn router(&self, ctx: &AppContext) -> loco_rs::Result<Router> {
-        self.build(ctx, &Settings::default())
+    /// Like the initializer, it checks the database, so it fails when roles
+    /// are on and their migration has not run.
+    pub async fn router(&self, ctx: &AppContext) -> loco_rs::Result<Router> {
+        let router = self.build(ctx, &Settings::default())?;
+        self.check_database(ctx).await?;
+        Ok(router)
     }
 
     /// Check that the database has what the admin needs: with roles on, the
-    /// roles table and the users' role column. The initializer runs this
-    /// when mounting; call it after [`Admin::router`] when mounting by hand.
-    ///
-    /// # Errors
-    ///
-    /// When roles are on and their migration has not run.
-    pub async fn check_database(&self, ctx: &AppContext) -> loco_rs::Result<()> {
+    /// roles table and the users' role column.
+    async fn check_database(&self, ctx: &AppContext) -> loco_rs::Result<()> {
         match self.auth.roles() {
             Some(users) => roles::check_tables(&ctx.db, &users)
                 .await

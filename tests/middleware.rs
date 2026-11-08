@@ -325,9 +325,10 @@ async fn server_side_sessions_need_the_auth_session_middleware() {
     let err = jwt()
         .middlewares_from::<StampApp>()
         .router(&ctx)
+        .await
         .err()
         .unwrap()
         .to_string();
     assert!(err.contains("auth_session"), "{err}");
-    assert!(jwt().router(&ctx).is_ok(), "the default stack has it");
+    assert!(jwt().router(&ctx).await.is_ok(), "the default stack has it");
 }

@@ -17,12 +17,13 @@ use sea_orm::{
 };
 use tower::ServiceExt;
 
-fn router(ctx: &loco_rs::app::AppContext) -> Router {
+async fn router(ctx: &loco_rs::app::AppContext) -> Router {
     Admin::new(AllowAll)
         .model::<users::Entity>()
         .model::<posts::Entity>()
         .model::<post_tags::Entity>()
         .router(ctx)
+        .await
         .unwrap()
 }
 
@@ -85,7 +86,7 @@ async fn streams_every_row_once_in_key_order() {
     let (db, ctx) = setup().await;
     let ann = create_user(&db.db, "ann@example.com", true).await;
     insert_posts(&db.db, ann.id, 1_201, "bulk").await;
-    let router = router(&ctx);
+    let router = router(&ctx).await;
 
     let mut body = export_body(&router, "/api/models/posts/export?sort=title&order=desc").await;
     let mut chunks = Vec::new();
@@ -139,7 +140,7 @@ async fn pages_through_composite_keys() {
             .await
             .expect("insert tags");
     }
-    let router = router(&ctx);
+    let router = router(&ctx).await;
 
     let mut body = export_body(&router, "/api/models/post_tags/export").await;
     let mut text = String::new();
@@ -175,7 +176,7 @@ async fn reads_one_snapshot_while_rows_change() {
     let (db, ctx) = setup().await;
     let ann = create_user(&db.db, "ann@example.com", true).await;
     insert_posts(&db.db, ann.id, 1_200, "before").await;
-    let router = router(&ctx);
+    let router = router(&ctx).await;
 
     let mut body = export_body(&router, "/api/models/posts/export").await;
     let header = next_chunk(&mut body).await.unwrap();
@@ -223,6 +224,7 @@ async fn stalled_download_is_stopped_and_releases_its_transaction() {
         .model::<posts::Entity>()
         .export_idle_timeout(Duration::from_millis(200))
         .router(&ctx)
+        .await
         .unwrap();
 
     let mut body = export_body(&router, "/api/models/posts/export").await;
@@ -274,6 +276,7 @@ async fn slow_clients_within_the_limit_get_everything() {
         .model::<posts::Entity>()
         .export_idle_timeout(Duration::from_millis(500))
         .router(&ctx)
+        .await
         .unwrap();
 
     let mut body = export_body(&router, "/api/models/posts/export").await;

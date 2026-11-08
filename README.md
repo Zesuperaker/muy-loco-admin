@@ -206,8 +206,7 @@ admin's email, so grant it only to people you would trust with those accounts; t
 warns about this. A role cannot be deleted while users have it. Do not register the generated
 `admin_roles` entity as a model; the admin refuses to mount if you do. With your own `AdminAuth`,
 return `UserRoles` from `AdminAuth::roles` (requests from users with a role fail without it) and
-the user's role with `AdminUser::with_role`. When mounting with `Admin::router`, also call
-`Admin::check_database`.
+the user's role with `AdminUser::with_role`.
 
 ## Middleware
 

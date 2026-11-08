@@ -4,3 +4,4 @@
 frontend/coverage
 dogfood/e2e
 lcov.info
+dogfood/tests

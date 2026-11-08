@@ -1,14 +1,25 @@
 # Build context: the repository root (the app depends on the crate at `..`).
 FROM rust:1.99.1-slim-trixie AS builder
 WORKDIR /src
+# Dependencies first, built against empty sources: this layer is reused (locally and from CI's
+# layer cache) until a manifest or Cargo.lock changes, so a source change only rebuilds the three
+# local crates. Cache mounts would not help CI, whose cache does not keep them. A new workspace
+# member or binary needs its manifest and stub here.
 COPY Cargo.toml ./
+COPY dogfood/Cargo.toml dogfood/Cargo.lock ./dogfood/
+COPY dogfood/migration/Cargo.toml ./dogfood/migration/
+RUN mkdir -p src dogfood/src/bin dogfood/migration/src \
+    && touch src/lib.rs dogfood/src/lib.rs dogfood/migration/src/lib.rs \
+    && echo 'fn main() {}' > dogfood/src/bin/main.rs \
+    && cargo build --manifest-path dogfood/Cargo.toml --release --locked --bin dogfood-cli \
+    && cargo clean --manifest-path dogfood/Cargo.toml --release --locked \
+        -p muy-loco-admin -p dogfood -p migration \
+    && rm -r src dogfood/src dogfood/migration/src
 COPY src ./src
 COPY frontend/dist ./frontend/dist
 COPY dogfood ./dogfood
 WORKDIR /src/dogfood
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/src/dogfood/target \
-    cargo build --release --locked --bin dogfood-cli \
+RUN cargo build --release --locked --bin dogfood-cli \
     && cp target/release/dogfood-cli /usr/local/bin/dogfood-cli
 
 FROM debian:trixie-20261027-slim

@@ -101,7 +101,10 @@ async fn config_is_public() {
     assert_eq!(body["base_path"], "/admin");
     assert_eq!(body["site_url"], "/");
     assert_eq!(body["login"]["type"], "none");
-    assert_eq!(body["version"], env!("CARGO_PKG_VERSION"));
+    assert!(
+        body.get("version").is_none(),
+        "anyone can read it: no version"
+    );
 }
 
 #[tokio::test]

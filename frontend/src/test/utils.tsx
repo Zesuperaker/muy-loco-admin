@@ -122,7 +122,6 @@ export const formConfig: AdminConfig = {
   title: "Test Admin",
   base_path: "/admin",
   site_url: "/",
-  version: "0.1.0",
   login: {
     type: "form",
     endpoint: "/api/auth/login",

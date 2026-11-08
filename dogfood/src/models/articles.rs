@@ -6,6 +6,7 @@ pub use super::_entities::sea_orm_active_enums::ArticleStatus;
 pub type Articles = Entity;
 
 #[derive(Debug, Validate, Deserialize)]
+#[validate(crate = "loco_rs::validator")]
 pub struct Validator {
     #[validate(length(min = 1, message = "title must not be empty"))]
     pub title: String,
@@ -22,7 +23,7 @@ impl Validatable for ActiveModel {
     }
 }
 
-#[async_trait::async_trait]
+#[async_trait]
 impl ActiveModelBehavior for ActiveModel {
     async fn before_save<C>(self, _db: &C, insert: bool) -> std::result::Result<Self, DbErr>
     where

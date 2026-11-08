@@ -1,9 +1,7 @@
-use async_trait::async_trait;
 use chrono::{offset::Local, Duration};
 use loco_rs::{auth::jwt, hash, prelude::*};
 use serde::{Deserialize, Serialize};
 use serde_json::Map;
-use uuid::Uuid;
 
 pub use super::_entities::users::{self, ActiveModel, Entity, Model};
 
@@ -25,6 +23,7 @@ pub struct RegisterParams {
 }
 
 #[derive(Debug, Validate, Deserialize)]
+#[validate(crate = "loco_rs::validator")]
 pub struct Validator {
     #[validate(length(min = 2, message = "Name must be at least 2 characters long."))]
     pub name: String,
@@ -41,7 +40,7 @@ impl Validatable for ActiveModel {
     }
 }
 
-#[async_trait::async_trait]
+#[async_trait]
 impl ActiveModelBehavior for super::_entities::users::ActiveModel {
     async fn before_save<C>(self, _db: &C, insert: bool) -> Result<Self, DbErr>
     where

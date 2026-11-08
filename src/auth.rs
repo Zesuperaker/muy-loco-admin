@@ -128,8 +128,16 @@ pub trait AdminAuth: Send + Sync + 'static {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AllowAll;
 
-/// Why [`AllowAll`] may not run, if it may not.
-fn allow_all_refusal(environment: &Environment, debug_build: bool) -> Option<String> {
+/// Why something meant only for local development, such as [`AllowAll`] or
+/// sessions signed with Loco's public development secret, may not run here,
+/// if it may not. It needs a debug build in the `development` or `test`
+/// environment. Release builds are refused whatever their environment, so a
+/// deployment that forgets `LOCO_ENV`, which Loco then runs as
+/// `development`, stays closed.
+pub(crate) fn development_only_refusal(
+    environment: &Environment,
+    debug_build: bool,
+) -> Option<String> {
     if !debug_build {
         return Some("this is a release build".to_string());
     }
@@ -144,14 +152,14 @@ impl AdminAuth for AllowAll {
     async fn authenticate(&self, ctx: &AppContext, _parts: &Parts) -> Result<AdminUser, AuthError> {
         // Checked when mounting too; this covers auth that wraps `AllowAll`
         // without its `check`.
-        if allow_all_refusal(&ctx.environment, cfg!(debug_assertions)).is_some() {
+        if development_only_refusal(&ctx.environment, cfg!(debug_assertions)).is_some() {
             return Err(AuthError::Forbidden);
         }
         Ok(AdminUser::new("anonymous", "Anonymous"))
     }
 
     fn check(&self, ctx: &AppContext) -> loco_rs::Result<()> {
-        if let Some(reason) = allow_all_refusal(&ctx.environment, cfg!(debug_assertions)) {
+        if let Some(reason) = development_only_refusal(&ctx.environment, cfg!(debug_assertions)) {
             return Err(loco_rs::Error::string(&format!(
                 "AllowAll lets anyone use the admin, so it only runs in a debug build in the \
                  development or test environment, but {reason}; use JwtAuth or your own AdminAuth"
@@ -311,15 +319,15 @@ mod tests {
     #[test]
     fn allow_all_needs_a_debug_build_in_development_or_test() {
         for env in [Environment::Development, Environment::Test] {
-            assert_eq!(allow_all_refusal(&env, true), None, "{env:?}");
+            assert_eq!(development_only_refusal(&env, true), None, "{env:?}");
             assert_eq!(
-                allow_all_refusal(&env, false).as_deref(),
+                development_only_refusal(&env, false).as_deref(),
                 Some("this is a release build"),
                 "{env:?}"
             );
         }
         for env in [Environment::Production, Environment::Any("staging".into())] {
-            let reason = allow_all_refusal(&env, true).expect("refused");
+            let reason = development_only_refusal(&env, true).expect("refused");
             assert!(reason.contains(&env.to_string()), "{reason}");
         }
     }

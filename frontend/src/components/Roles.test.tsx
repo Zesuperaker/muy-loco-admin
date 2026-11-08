@@ -277,6 +277,39 @@ describe("Roles", () => {
     ]);
   });
 
+  it("warns when a role can edit the admin's users", async () => {
+    mockFetch(
+      baseRoutes({
+        "GET /admin/api/me": { body: manager },
+        "GET /admin/api/schema": { body: { models: [usersWithRoles] } },
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp("/admin/roles/new");
+    await user.click(await screen.findByLabelText("Users: Edit"));
+    expect(screen.getByRole("list", { name: "Warnings" })).toHaveTextContent(
+      "This role can edit Users, including admins with full access",
+    );
+  });
+
+  it("keeps showing a user's role when the roles cannot load", async () => {
+    mockFetch(
+      baseRoutes({
+        "GET /admin/api/me": { body: manager },
+        "GET /admin/api/schema": { body: { models: [usersWithRoles] } },
+        "GET /admin/api/roles": { status: 500, body: { error: "boom" } },
+        "GET /admin/api/models/users/records/1": {
+          body: { record: userRecord(3), labels: { admin_role_id: { "3": "Editor" } } },
+        },
+      }),
+    );
+    renderApp("/admin/models/users/records/1");
+    expect(await screen.findByText("The roles could not be loaded.")).toBeInTheDocument();
+    const select = screen.getByLabelText("Admin role");
+    expect(select).toHaveValue("3");
+    expect(within(select).getByRole("option", { selected: true })).toHaveTextContent("Editor");
+  });
+
   it("shows and filters users by role", async () => {
     mockFetch(
       baseRoutes({

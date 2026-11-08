@@ -43,7 +43,7 @@ pub mod users {
         pub password: String,
         pub api_key: String,
         pub is_admin: bool,
-        /// Added by `muy_loco_admin::migrations`.
+        /// Added by `muy_loco_admin::migrations::roles`.
         pub admin_role_id: Option<i64>,
     }
 
@@ -333,7 +333,7 @@ pub struct Migrator;
 #[async_trait::async_trait]
 impl MigratorTrait for Migrator {
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
-        muy_loco_admin::migrations("users")
+        vec![muy_loco_admin::migrations::roles("users")]
     }
 }
 

@@ -124,7 +124,7 @@ pub struct FieldMeta {
     pub choices: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub relation: Option<RelationMeta>,
-    /// Whether this is the users' role column (see [`crate::migrations`]).
+    /// Whether this is the users' role column (see [`crate::migrations::roles`]).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub role: bool,
 }

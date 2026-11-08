@@ -1,6 +1,6 @@
 //! Roles: what each admin user may do, created and edited in the admin UI.
 //!
-//! Roles are rows of the `admin_roles` table, which [`migrations`] creates
+//! Roles are rows of the `admin_roles` table, which [`migration`] creates
 //! along with a nullable role column on the users table. An admin user
 //! without a role has full access; one with a role may only do what the role
 //! grants, and never more than each model's [`ModelAdmin`](crate::ModelAdmin)
@@ -31,36 +31,35 @@ use crate::{
 
 /// The table roles are kept in.
 pub(crate) const ROLES_TABLE: &str = "admin_roles";
-/// The column [`migrations`] adds to the users table.
+/// The column [`migration`] adds to the users table.
 pub(crate) const ROLE_COLUMN: &str = "admin_role_id";
 /// The name the migration is recorded under. It must never change: apps that
 /// ran it would fail to migrate.
 const MIGRATION: &str = "m20261108_000001_muy_loco_admin_roles";
 const MAX_NAME: usize = 100;
 
-/// The admin's migrations, to add to the app's `Migrator` after its own:
+/// The migration that turns roles on, to add to the app's `Migrator` at the
+/// end of its list, above `inject-above`:
 ///
 /// ```rust,ignore
 /// // migration/src/lib.rs
 /// fn migrations() -> Vec<Box<dyn MigrationTrait>> {
-///     let mut migrations: Vec<Box<dyn MigrationTrait>> = vec![
+///     vec![
 ///         Box::new(m20220101_000001_users::Migration),
+///         muy_loco_admin::migrations::roles("users"),
 ///         // inject-above (do not remove this comment)
-///     ];
-///     migrations.extend(muy_loco_admin::migrations("users"));
-///     migrations
+///     ]
 /// }
 /// ```
 ///
-/// They create the `admin_roles` table and add a nullable `admin_role_id`
+/// It creates the `admin_roles` table and adds a nullable `admin_role_id`
 /// column to `users_table`, the table of the users who sign in to the admin.
-/// A role cannot be deleted while users have it. Later versions of this
-/// crate may add migrations here; `cargo loco db migrate` runs them.
+/// A role cannot be deleted while users have it.
 #[must_use]
-pub fn migrations(users_table: &str) -> Vec<Box<dyn MigrationTrait>> {
-    vec![Box::new(CreateRoles {
+pub fn migration(users_table: &str) -> Box<dyn MigrationTrait> {
+    Box::new(CreateRoles {
         users: users_table.to_string(),
-    })]
+    })
 }
 
 struct CreateRoles {
@@ -191,19 +190,19 @@ pub(crate) struct Role {
     pub permissions: Permissions,
 }
 
-impl TryFrom<entity::Model> for Role {
-    type Error = AdminError;
-
-    fn try_from(model: entity::Model) -> AdminResult<Self> {
-        // A role that cannot be read grants nothing rather than everything.
-        let permissions = serde_json::from_str(&model.permissions).map_err(|e| {
-            AdminError::Internal(format!("role {} has invalid permissions: {e}", model.id))
-        })?;
-        Ok(Self {
+impl From<entity::Model> for Role {
+    fn from(model: entity::Model) -> Self {
+        // A role whose permissions cannot be read grants nothing rather than
+        // everything, and can still be listed, edited and deleted.
+        let permissions = serde_json::from_str(&model.permissions).unwrap_or_else(|e| {
+            tracing::error!(role = model.id, error = %e, "role has unreadable permissions; it grants nothing");
+            Permissions::new()
+        });
+        Self {
             id: model.id,
             name: model.name,
             permissions,
-        })
+        }
     }
 }
 
@@ -265,34 +264,23 @@ pub(crate) struct RoleInput {
 }
 
 fn invalid(field: &str, message: impl Into<String>) -> AdminError {
-    AdminError::Validation {
-        message: "some fields are invalid".to_string(),
-        fields: FieldErrors::from([(field.to_string(), vec![message.into()])]),
-    }
+    AdminError::invalid(FieldErrors::from([(
+        field.to_string(),
+        vec![message.into()],
+    )]))
 }
 
-/// Check `permissions` against the registered models: unknown models and
-/// actions are refused, permissions a model does not offer are dropped, any
-/// permission implies `view`, and models granted nothing are left out.
-pub(crate) fn normalize(
-    models: &[&ModelMeta],
-    permissions: Permissions,
-) -> AdminResult<Permissions> {
+/// Fit `permissions` to the registered models: models and actions that are
+/// not registered (any more) and permissions a model does not offer are
+/// dropped, any permission implies `view`, and models granted nothing are
+/// left out. A role saved before a model or action was removed can then
+/// still be saved.
+pub(crate) fn normalize(models: &[&ModelMeta], permissions: Permissions) -> Permissions {
     let mut out = Permissions::new();
     for (name, grant) in permissions {
         let Some(meta) = models.iter().find(|m| m.name == name) else {
-            return Err(invalid("permissions", format!("unknown model `{name}`")));
+            continue;
         };
-        if let Some(action) = grant
-            .actions
-            .iter()
-            .find(|a| !meta.actions.iter().any(|known| &known.name == *a))
-        {
-            return Err(invalid(
-                "permissions",
-                format!("model `{name}` has no action `{action}`"),
-            ));
-        }
         let caps = meta.capabilities;
         let mut grant = Grant {
             view: grant.view,
@@ -300,14 +288,18 @@ pub(crate) fn normalize(
             update: grant.update && caps.update,
             delete: grant.delete && caps.delete,
             export: grant.export && caps.export,
-            actions: grant.actions,
+            actions: grant
+                .actions
+                .into_iter()
+                .filter(|a| meta.actions.iter().any(|known| &known.name == a))
+                .collect(),
         };
         if grant.grants_anything() {
             grant.view = true;
             out.insert(name, grant);
         }
     }
-    Ok(out)
+    out
 }
 
 fn valid_name(name: &str) -> AdminResult<String> {
@@ -340,22 +332,21 @@ fn to_json(permissions: &Permissions) -> AdminResult<String> {
 }
 
 pub(crate) async fn find(db: &DatabaseConnection, id: i64) -> AdminResult<Option<Role>> {
-    entity::Entity::find_by_id(id)
+    Ok(entity::Entity::find_by_id(id)
         .one(db)
         .await?
-        .map(Role::try_from)
-        .transpose()
+        .map(Role::from))
 }
 
 pub(crate) async fn all(db: &DatabaseConnection) -> AdminResult<Vec<Role>> {
-    entity::Entity::find()
+    Ok(entity::Entity::find()
         .order_by_asc(entity::Column::Name)
         .order_by_asc(entity::Column::Id)
         .all(db)
         .await?
         .into_iter()
-        .map(Role::try_from)
-        .collect()
+        .map(Role::from)
+        .collect())
 }
 
 /// Names of the roles with these ids.
@@ -381,7 +372,7 @@ pub(crate) async fn create(
     input: RoleInput,
 ) -> AdminResult<Role> {
     let name = valid_name(input.name.as_deref().unwrap_or_default())?;
-    let permissions = normalize(models, input.permissions.unwrap_or_default())?;
+    let permissions = normalize(models, input.permissions.unwrap_or_default());
     check_unique(db, &name, None).await?;
     let now = ChronoUtc::now().fixed_offset();
     let model = entity::ActiveModel {
@@ -393,7 +384,7 @@ pub(crate) async fn create(
     }
     .insert(db)
     .await?;
-    Role::try_from(model)
+    Ok(Role::from(model))
 }
 
 pub(crate) async fn update(
@@ -413,10 +404,10 @@ pub(crate) async fn update(
         am.name = Set(name);
     }
     if let Some(permissions) = input.permissions {
-        am.permissions = Set(to_json(&normalize(models, permissions)?)?);
+        am.permissions = Set(to_json(&normalize(models, permissions))?);
     }
     am.updated_at = Set(ChronoUtc::now().fixed_offset());
-    Role::try_from(am.update(db).await?)
+    Ok(Role::from(am.update(db).await?))
 }
 
 /// Delete a role, unless users still have it.
@@ -488,8 +479,8 @@ pub(crate) async fn check_tables(db: &DatabaseConnection, users: &UserRoles) -> 
         if let Err(err) = db.query_one(&query).await {
             return Err(format!(
                 "roles need the `{ROLES_TABLE}` table and the `{}.{}` column: add \
-                 `muy_loco_admin::migrations(\"{}\")` to the app's `Migrator` and run \
-                 `cargo loco db migrate` ({err})",
+                 `muy_loco_admin::migrations::roles(\"{}\")` to the app's `Migrator` and \
+                 run `cargo loco db migrate` ({err})",
                 users.table, users.column, users.table
             ));
         }
@@ -564,7 +555,7 @@ mod tests {
                 grant(serde_json::json!({"create": true})),
             ),
         ]);
-        let out = normalize(&models, input).unwrap();
+        let out = normalize(&models, input);
         assert_eq!(
             out,
             Permissions::from([(
@@ -573,15 +564,25 @@ mod tests {
             )])
         );
 
-        let unknown = Permissions::from([("nope".to_string(), Grant::default())]);
-        let err = normalize(&models, unknown).unwrap_err();
-        assert!(matches!(err, AdminError::Validation { ref fields, .. }
-            if fields["permissions"] == ["unknown model `nope`"]));
-        let action = Permissions::from([(
-            "tags".to_string(),
-            grant(serde_json::json!({"actions": ["publish"]})),
-        )]);
-        assert!(normalize(&models, action).is_err());
+        // Models and actions that are no longer registered are dropped.
+        let stale = Permissions::from([
+            ("gone".to_string(), grant(serde_json::json!({"view": true}))),
+            (
+                "posts".to_string(),
+                grant(serde_json::json!({"view": true, "actions": ["publish", "archive"]})),
+            ),
+            (
+                "tags".to_string(),
+                grant(serde_json::json!({"actions": ["publish"]})),
+            ),
+        ]);
+        assert_eq!(
+            normalize(&models, stale),
+            Permissions::from([(
+                "posts".to_string(),
+                grant(serde_json::json!({"view": true, "actions": ["publish"]}))
+            )])
+        );
         assert!(serde_json::from_value::<Grant>(serde_json::json!({"drop": true})).is_err());
     }
 
@@ -637,9 +638,8 @@ mod tests {
             created_at: now,
             updated_at: now,
         };
-        assert!(matches!(
-            Role::try_from(model),
-            Err(AdminError::Internal(_))
-        ));
+        let role = Role::from(model);
+        assert_eq!(role.name, "Broken");
+        assert!(role.permissions.is_empty());
     }
 }

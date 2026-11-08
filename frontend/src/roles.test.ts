@@ -6,8 +6,14 @@ import {
   summary,
   toggleAction,
   toggleOperation,
+  userWarnings,
 } from "./roles";
-import { postsModel, usersModel } from "./test/utils";
+import { field, postsModel, usersModel } from "./test/utils";
+
+/** Permissions granting `grant` on users. */
+function users(grant: object) {
+  return { users: { ...emptyGrant(), view: true, ...grant } };
+}
 
 describe("roles", () => {
   it("grants view with any other permission and removes everything with view", () => {
@@ -51,5 +57,25 @@ describe("roles", () => {
     expect(plainIdWarnings(edit, [postsModel])).toEqual([
       "Posts › User will be a plain id field, because this role cannot view users.",
     ]);
+  });
+
+  it("warns when the role can edit or delete the admin's users", () => {
+    const admins = {
+      ...usersModel,
+      fields: [...usersModel.fields, field("admin_role_id", { kind: "integer", role: true })],
+      capabilities: { ...usersModel.capabilities, delete: true },
+    };
+    expect(userWarnings(users({ update: true }), [admins, postsModel])).toEqual([
+      "This role can edit Users, including admins with full access, for example change their email. Grant it only to people you would trust with full access.",
+    ]);
+    expect(userWarnings(users({ update: true, delete: true }), [admins])[0]).toContain(
+      "can edit and delete Users",
+    );
+    expect(userWarnings(users({ delete: true }), [admins])[0]).toContain("can delete Users");
+    // Viewing is fine, and so are models without the role column.
+    expect(userWarnings(users({}), [admins])).toEqual([]);
+    expect(userWarnings(users({ update: true }), [usersModel])).toEqual([]);
+    // A model that does not offer the write is not warned about.
+    expect(userWarnings(users({ delete: true }), [usersModel])).toEqual([]);
   });
 });

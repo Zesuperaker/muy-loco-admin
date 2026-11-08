@@ -68,6 +68,28 @@ export function summary(permissions: Permissions, models: ModelMeta[]): string {
 }
 
 /**
+ * Models of the admin's own users (those with the role column) that the role
+ * can edit or delete: it can then change or delete admins with full access,
+ * for example change their email and take over their accounts.
+ */
+export function userWarnings(permissions: Permissions, models: ModelMeta[]): string[] {
+  const warnings: string[] = [];
+  for (const model of models) {
+    const grant = permissions[model.name];
+    if (!grant || !model.fields.some((f) => f.role)) continue;
+    const verbs = [
+      grant.update && model.capabilities.update ? "edit" : null,
+      grant.delete && model.capabilities.delete ? "delete" : null,
+    ].filter((verb) => verb !== null);
+    if (verbs.length === 0) continue;
+    warnings.push(
+      `This role can ${verbs.join(" and ")} ${model.label}, including admins with full access, for example change their email. Grant it only to people you would trust with full access.`,
+    );
+  }
+  return warnings;
+}
+
+/**
  * Foreign keys the role can set but whose target model it cannot view: the
  * admin shows those as plain id fields instead of searchable pickers.
  */

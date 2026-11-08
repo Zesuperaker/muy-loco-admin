@@ -224,7 +224,12 @@ test("manages roles and assigns them", async ({ page }) => {
   await expect(warnings).toContainText("Articles › Category will be a plain id field");
   await page.getByLabel("Users: Edit").check();
   await expect(warnings).not.toContainText("Articles › User");
+  await expect(warnings).toContainText(
+    "This role can edit Users, including admins with full access",
+  );
   await page.getByLabel("Categories: View").check();
+  await page.getByLabel("Users: Edit").uncheck();
+  await expect(page.getByLabel("Users: View")).toBeChecked();
   await expect(warnings).toHaveCount(0);
   await page.getByRole("button", { name: "Create" }).click();
   await expect(page.getByText("Created Support")).toBeVisible();

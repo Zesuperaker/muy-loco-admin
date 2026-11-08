@@ -38,5 +38,14 @@ pub use error::{AdminError, FieldErrors};
 pub use meta::{FieldKind, SortDirection};
 pub use model::{ActionResult, ModelAdmin};
 pub use query::{MAX_PER_PAGE, NOT_NULL_FILTER, NULL_FILTER};
-pub use roles::migrations;
 pub use task::PromoteAdmin;
+
+/// The admin's migrations, to add to the app's `Migrator`.
+///
+/// Add each at the end of the list, above `inject-above`, so the list stays
+/// in the order the migrations ran and `cargo loco db down` rolls back the
+/// newest first. Later versions may add migrations here; add them the same
+/// way.
+pub mod migrations {
+    pub use crate::roles::migration as roles;
+}

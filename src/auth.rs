@@ -2,7 +2,7 @@
 //!
 //! Every admin API request is authenticated through an [`AdminAuth`]
 //! implementation. A user it lets in without a role may use the whole admin;
-//! one with a [role](crate::migrations) may only do what the role grants.
+//! one with a [role](crate::migrations::roles) may only do what the role grants.
 //! What can be done to each model at most is set per model with
 //! [`ModelAdmin`](crate::ModelAdmin).
 
@@ -49,7 +49,7 @@ impl AdminUser {
 /// [`AdminAuth::roles`] turns roles on.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UserRoles {
-    /// The users table, as passed to [`migrations`](crate::migrations).
+    /// The users table, as passed to [`migrations::roles`](crate::migrations::roles).
     pub table: String,
     /// The column holding each user's role, `admin_role_id`.
     pub column: String,
@@ -351,7 +351,7 @@ mod jwt {
         U: Authenticable + ModelTrait + Send + Sync + 'static,
     {
         /// Turn on roles. `role` is the column
-        /// [`migrations`](crate::migrations) added to the users table;
+        /// [`migrations::roles`](crate::migrations::roles) added to the users table;
         /// `access` lists the columns `allow` reads, such as `is_admin`.
         /// Users with full access can then manage roles and assign them; only
         /// they may change `role` and `access`, so a user with a role cannot
@@ -374,7 +374,7 @@ mod jwt {
             .then(|| {
                 format!(
                     "the role column `{}` must be the nullable bigint column that \
-                     `muy_loco_admin::migrations` adds; run `cargo loco db entities` after \
+                     `muy_loco_admin::migrations::roles` adds; run `cargo loco db entities` after \
                      migrating",
                     role.as_str()
                 )

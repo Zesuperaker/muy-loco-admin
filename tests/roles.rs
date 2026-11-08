@@ -113,8 +113,9 @@ async fn full_admins_create_roles() {
     assert_eq!(me["can_manage_roles"], true);
     assert_eq!(w.full.get("/api/roles").await.json(), json!({"roles": []}));
 
-    // Permissions a model does not offer are dropped; any permission
-    // implies view; models granted nothing are left out.
+    // Permissions a model does not offer and models and actions that are not
+    // registered are dropped; any permission implies view; models granted
+    // nothing are left out.
     let res = w
         .full
         .post(
@@ -124,7 +125,8 @@ async fn full_admins_create_roles() {
                 "permissions": {
                     "posts": {"update": true, "actions": ["publish"]},
                     "users": {"create": true},
-                    "post_tags": {}
+                    "post_tags": {"actions": ["publish"]},
+                    "nope": {"view": true}
                 }
             }),
         )
@@ -150,16 +152,6 @@ async fn full_admins_create_roles() {
             "must be at most 100 characters",
         ),
         (json!({"name": "Editor"}), "name", "is already taken"),
-        (
-            json!({"name": "A", "permissions": {"nope": {"view": true}}}),
-            "permissions",
-            "unknown model `nope`",
-        ),
-        (
-            json!({"name": "A", "permissions": {"post_tags": {"actions": ["publish"]}}}),
-            "permissions",
-            "model `post_tags` has no action `publish`",
-        ),
     ] {
         let res = w.full.post("/api/roles", body.clone()).await;
         assert_eq!(res.status, 422, "{body}");
@@ -512,36 +504,147 @@ async fn a_role_with_nothing_shows_nothing() {
     assert_eq!(client.get("/api/stats").await.json(), json!({"counts": {}}));
 }
 
-/// Signs everyone in with the role it was given.
-struct Fixed(Option<i64>);
+fn user_roles() -> UserRoles {
+    UserRoles {
+        table: "users".to_string(),
+        column: "admin_role_id".to_string(),
+        protected: vec!["is_admin".to_string()],
+    }
+}
+
+/// Signs everyone in with the role it was given, with roles on or off.
+struct Fixed(Option<i64>, Option<UserRoles>);
 
 #[async_trait]
 impl AdminAuth for Fixed {
     async fn authenticate(&self, _: &AppContext, _: &Parts) -> Result<AdminUser, AuthError> {
         Ok(AdminUser::new("u", "U").with_role(self.0))
     }
+
+    fn roles(&self) -> Option<UserRoles> {
+        self.1.clone()
+    }
+}
+
+/// Insert a role as something other than the admin might have saved it.
+async fn raw_role(db: &sea_orm::DatabaseConnection, name: &str, permissions: &str) -> i64 {
+    let now = sea_orm::prelude::ChronoUtc::now().fixed_offset();
+    admin_roles::ActiveModel {
+        name: Set(name.to_string()),
+        permissions: Set(permissions.to_string()),
+        created_at: Set(now),
+        updated_at: Set(now),
+        ..Default::default()
+    }
+    .insert(db)
+    .await
+    .unwrap()
+    .id
 }
 
 #[tokio::test]
 async fn missing_and_unreadable_roles_grant_nothing() {
     let (db, ctx) = setup().await;
-    let missing = Client::new(admin(Fixed(Some(999))).router(&ctx).unwrap());
+    let missing = Client::new(
+        admin(Fixed(Some(999), Some(user_roles())))
+            .router(&ctx)
+            .unwrap(),
+    );
     assert_eq!(missing.get("/api/me").await.status, 403);
     assert_eq!(missing.get("/api/schema").await.status, 403);
 
-    let now = sea_orm::prelude::ChronoUtc::now().fixed_offset();
-    let broken = admin_roles::ActiveModel {
-        name: Set("Broken".to_string()),
-        permissions: Set("not json".to_string()),
-        created_at: Set(now),
-        updated_at: Set(now),
-        ..Default::default()
-    }
-    .insert(&db.db)
-    .await
-    .unwrap();
-    let client = Client::new(admin(Fixed(Some(broken.id))).router(&ctx).unwrap());
-    assert_eq!(client.get("/api/schema").await.status, 500);
+    let broken = raw_role(&db.db, "Broken", "not json").await;
+    let client = Client::new(
+        admin(Fixed(Some(broken), Some(user_roles())))
+            .router(&ctx)
+            .unwrap(),
+    );
+    assert_eq!(
+        client.get("/api/schema").await.json(),
+        json!({"models": []})
+    );
+    assert_eq!(client.get("/api/roles").await.status, 403);
+
+    // Full admins can still list, fix and delete it.
+    let full = Client::new(admin(Fixed(None, Some(user_roles()))).router(&ctx).unwrap());
+    let res = full.get("/api/roles").await;
+    assert_eq!(res.status, 200, "{}", res.text());
+    assert_eq!(
+        res.json()["roles"],
+        json!([{"id": broken, "name": "Broken", "permissions": {}, "users": 0}])
+    );
+    let res = full.get(&format!("/api/roles/{broken}")).await;
+    assert_eq!(res.json()["role"]["permissions"], json!({}));
+    let res = full
+        .patch(
+            &format!("/api/roles/{broken}"),
+            json!({"permissions": {"posts": {"view": true}}}),
+        )
+        .await;
+    assert_eq!(res.status, 200, "{}", res.text());
+    assert_eq!(
+        client.get("/api/schema").await.json()["models"][0]["name"],
+        "posts"
+    );
+    let res = full.delete(&format!("/api/roles/{broken}")).await;
+    assert_eq!(res.status, 200, "{}", res.text());
+}
+
+#[tokio::test]
+async fn roles_naming_removed_models_can_be_saved() {
+    let w = world().await;
+    let stale = raw_role(
+        &w.db.db,
+        "Stale",
+        r#"{"gone": {"view": true}, "posts": {"view": true, "actions": ["publish", "retired"]}}"#,
+    )
+    .await;
+    let role = w.full.get(&format!("/api/roles/{stale}")).await.json()["role"].clone();
+    // The UI sends back what it was given, with the new name.
+    let res = w
+        .full
+        .patch(
+            &format!("/api/roles/{stale}"),
+            json!({"name": "Fresh", "permissions": role["permissions"]}),
+        )
+        .await;
+    assert_eq!(res.status, 200, "{}", res.text());
+    assert_eq!(res.json()["role"]["name"], "Fresh");
+    assert_eq!(
+        res.json()["role"]["permissions"],
+        json!({"posts": {
+            "view": true, "create": false, "update": false, "delete": false, "export": false,
+            "actions": ["publish"]
+        }})
+    );
+}
+
+#[tokio::test]
+async fn a_role_needs_the_auth_to_keep_roles() {
+    let (db, ctx) = setup().await;
+    let editor = raw_role(
+        &db.db,
+        "Editor",
+        r#"{"users": {"view": true, "update": true}}"#,
+    )
+    .await;
+    let user = create_user(&db.db, "editor@example.com", true).await;
+    set_role(&db.db, &user, Some(editor)).await;
+    // The auth hands out a role but never says where roles are kept, so the
+    // admin cannot protect the role column: it refuses rather than let the
+    // user change their own role.
+    let client = Client::new(admin(Fixed(Some(editor), None)).router(&ctx).unwrap());
+    assert_eq!(client.get("/api/me").await.status, 500);
+    let res = client
+        .patch(
+            &format!("/api/models/users/records/{}", user.id),
+            json!({"admin_role_id": null}),
+        )
+        .await;
+    assert_eq!(res.status, 500);
+    // Users without a role are unaffected.
+    let full = Client::new(admin(Fixed(None, None)).router(&ctx).unwrap());
+    assert_eq!(full.get("/api/me").await.status, 200);
 }
 
 #[tokio::test]
@@ -561,21 +664,8 @@ async fn roles_are_off_unless_the_auth_keeps_them() {
 }
 
 /// Roles kept by a custom auth, which declares where.
-struct Custom;
-
-#[async_trait]
-impl AdminAuth for Custom {
-    async fn authenticate(&self, _: &AppContext, _: &Parts) -> Result<AdminUser, AuthError> {
-        Ok(AdminUser::new("u", "U"))
-    }
-
-    fn roles(&self) -> Option<UserRoles> {
-        Some(UserRoles {
-            table: "users".to_string(),
-            column: "admin_role_id".to_string(),
-            protected: vec!["is_admin".to_string()],
-        })
-    }
+fn custom() -> Fixed {
+    Fixed(None, Some(user_roles()))
 }
 
 #[tokio::test]
@@ -583,22 +673,34 @@ async fn mounting_checks_the_roles_tables() {
     let (db, ctx) = setup().await;
     let router = Router::new();
     assert!(
-        admin(Custom)
+        admin(custom())
             .after_routes(router.clone(), &ctx)
             .await
             .is_ok()
     );
 
     Migrator::down(&db.db, None).await.unwrap();
-    let err = admin(Custom)
+    let err = admin(custom())
         .after_routes(router.clone(), &ctx)
         .await
         .expect_err("missing tables");
     assert!(
         err.to_string()
-            .contains("add `muy_loco_admin::migrations(\"users\")` to the app's `Migrator`"),
+            .contains("add `muy_loco_admin::migrations::roles(\"users\")` to the app's `Migrator`"),
         "{err}"
     );
+    // Mounting by hand cannot check, so the app asks.
+    assert!(admin(custom()).router(&ctx).is_ok());
+    let err = admin(custom())
+        .check_database(&ctx)
+        .await
+        .expect_err("missing tables");
+    assert!(
+        err.to_string()
+            .contains("roles need the `admin_roles` table"),
+        "{err}"
+    );
+    assert!(admin(AllowAll).check_database(&ctx).await.is_ok());
     // Without roles, nothing is checked.
     assert!(
         admin(AllowAll)
@@ -682,5 +784,12 @@ async fn misconfigured_roles_fail_at_mount() {
         err.to_string()
             .contains("the `admin_roles` table is managed on the admin's Roles page"),
         "{err}"
+    );
+    // Without roles, an app's own `admin_roles` table is just a table.
+    assert!(
+        admin(AllowAll)
+            .model::<admin_roles::Entity>()
+            .router(&ctx)
+            .is_ok()
     );
 }

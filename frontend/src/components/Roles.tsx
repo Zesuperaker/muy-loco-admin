@@ -12,6 +12,7 @@ import {
   summary,
   toggleAction,
   toggleOperation,
+  userWarnings,
 } from "../roles";
 import type { ModelMeta, Permissions, Role } from "../types";
 import { Button, Card, ErrorBanner, Spinner, useToast } from "./ui";
@@ -198,7 +199,7 @@ function RoleForm({ models, role }: { models: ModelMeta[]; role?: Role }) {
     save.mutate();
   };
 
-  const warnings = plainIdWarnings(permissions, models);
+  const warnings = [...userWarnings(permissions, models), ...plainIdWarnings(permissions, models)];
   const busy = save.isPending || remove.isPending;
 
   return (

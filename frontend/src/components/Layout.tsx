@@ -4,6 +4,12 @@ import { paths } from "../paths";
 import type { AdminUser, ModelMeta } from "../types";
 import { Button } from "./ui";
 
+function navClass({ isActive }: { isActive: boolean }): string {
+  return `rounded-md px-3 py-1.5 text-sm ${
+    isActive ? "bg-indigo-50 font-medium text-indigo-700" : "text-slate-600 hover:bg-slate-100"
+  }`;
+}
+
 export function Layout({
   title,
   siteUrl,
@@ -32,13 +38,7 @@ export function Layout({
             <NavLink
               key={model.name}
               to={paths.list(model.name)}
-              className={({ isActive }) =>
-                `rounded-md px-3 py-1.5 text-sm ${
-                  isActive
-                    ? "bg-indigo-50 font-medium text-indigo-700"
-                    : "text-slate-600 hover:bg-slate-100"
-                }`
-              }
+              className={navClass}
             >
               {model.label}
             </NavLink>
@@ -51,13 +51,7 @@ export function Layout({
           >
             <NavLink
               to={paths.roles()}
-              className={({ isActive }) =>
-                `rounded-md px-3 py-1.5 text-sm ${
-                  isActive
-                    ? "bg-indigo-50 font-medium text-indigo-700"
-                    : "text-slate-600 hover:bg-slate-100"
-                }`
-              }
+              className={navClass}
             >
               Roles
             </NavLink>

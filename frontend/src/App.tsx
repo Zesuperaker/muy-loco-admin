@@ -11,6 +11,7 @@ import { RoleList, RolePage } from "./components/Roles";
 import { ErrorBanner, Spinner, useToast } from "./components/ui";
 import { paths } from "./paths";
 import type { AdminConfig, AdminUser, ModelMeta } from "./types";
+import { UserContext } from "./user";
 
 function NotFound() {
   return (
@@ -93,52 +94,54 @@ function Shell({
   useTitle(config.title);
   const models = schema.data?.models ?? [];
   return (
-    <Layout
-      title={config.title}
-      siteUrl={config.site_url}
-      user={user}
-      models={models}
-      onSignOut={onSignOut}
-    >
-      {schema.isPending ? (
-        <Spinner />
-      ) : schema.error ? (
-        <ErrorBanner error={schema.error} />
-      ) : (
-        <Routes>
-          <Route path="/" element={<Dashboard models={models} />} />
-          <Route
-            path="/models/:model"
-            element={<ModelRoute models={models} view="list" title={config.title} />}
-          />
-          <Route
-            path="/models/:model/new"
-            element={<ModelRoute models={models} view="new" title={config.title} />}
-          />
-          <Route
-            path="/models/:model/records/:key"
-            element={<ModelRoute models={models} view="record" title={config.title} />}
-          />
-          {user.can_manage_roles && (
-            <>
-              <Route
-                path="/roles"
-                element={<RolesRoute models={models} view="list" title={config.title} />}
-              />
-              <Route
-                path="/roles/new"
-                element={<RolesRoute models={models} view="new" title={config.title} />}
-              />
-              <Route
-                path="/roles/:id"
-                element={<RolesRoute models={models} view="edit" title={config.title} />}
-              />
-            </>
-          )}
-          <Route path="*" element={<NotFound />} />
-        </Routes>
-      )}
-    </Layout>
+    <UserContext value={user}>
+      <Layout
+        title={config.title}
+        siteUrl={config.site_url}
+        user={user}
+        models={models}
+        onSignOut={onSignOut}
+      >
+        {schema.isPending ? (
+          <Spinner />
+        ) : schema.error ? (
+          <ErrorBanner error={schema.error} />
+        ) : (
+          <Routes>
+            <Route path="/" element={<Dashboard models={models} />} />
+            <Route
+              path="/models/:model"
+              element={<ModelRoute models={models} view="list" title={config.title} />}
+            />
+            <Route
+              path="/models/:model/new"
+              element={<ModelRoute models={models} view="new" title={config.title} />}
+            />
+            <Route
+              path="/models/:model/records/:key"
+              element={<ModelRoute models={models} view="record" title={config.title} />}
+            />
+            {user.can_manage_roles && (
+              <>
+                <Route
+                  path="/roles"
+                  element={<RolesRoute models={models} view="list" title={config.title} />}
+                />
+                <Route
+                  path="/roles/new"
+                  element={<RolesRoute models={models} view="new" title={config.title} />}
+                />
+                <Route
+                  path="/roles/:id"
+                  element={<RolesRoute models={models} view="edit" title={config.title} />}
+                />
+              </>
+            )}
+            <Route path="*" element={<NotFound />} />
+          </Routes>
+        )}
+      </Layout>
+    </UserContext>
   );
 }
 

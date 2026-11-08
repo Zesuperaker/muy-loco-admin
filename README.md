@@ -171,22 +171,21 @@ they create and edit roles on the Roles page and give a user a role on the user'
 a role cannot view are hidden, and foreign keys to them are plain id fields; the role editor
 warns about these.
 
-To turn roles on, add `muy-loco-admin` to `migration/Cargo.toml` and its migrations to
-`migration/src/lib.rs`:
+To turn roles on, add `muy-loco-admin` to `migration/Cargo.toml` and its roles migration to the
+end of the list in `migration/src/lib.rs`:
 
 ```rust
 fn migrations() -> Vec<Box<dyn MigrationTrait>> {
-    let mut migrations: Vec<Box<dyn MigrationTrait>> = vec![
+    vec![
         // ...the app's migrations
+        muy_loco_admin::migrations::roles("users"),
         // inject-above (do not remove this comment)
-    ];
-    migrations.extend(muy_loco_admin::migrations("users"));
-    migrations
+    ]
 }
 ```
 
-They create an `admin_roles` table and give `users` a nullable `admin_role_id` column. Later
-versions of the crate may add migrations here; `cargo loco db migrate` runs them. Migrate and
+It creates an `admin_roles` table and gives `users` a nullable `admin_role_id` column. Migrations
+generated later go after it, so `cargo loco db down` rolls back the newest first. Migrate and
 regenerate the entities:
 
 ```sh
@@ -203,10 +202,12 @@ JwtAuth::<users::Model>::new(|user| user.is_admin == Some(true))
 
 Only admin users with full access may change those columns, so a user with a role cannot hand
 out access. A role that can edit users can still change their other columns, such as a full
-admin's email, so grant it only to people you would trust with those accounts. A role cannot be
-deleted while users have it. Do not register the generated
+admin's email, so grant it only to people you would trust with those accounts; the role editor
+warns about this. A role cannot be deleted while users have it. Do not register the generated
 `admin_roles` entity as a model; the admin refuses to mount if you do. With your own `AdminAuth`,
-return `UserRoles` from `AdminAuth::roles` and the user's role with `AdminUser::with_role`.
+return `UserRoles` from `AdminAuth::roles` (requests from users with a role fail without it) and
+the user's role with `AdminUser::with_role`. When mounting with `Admin::router`, also call
+`Admin::check_database`.
 
 ## Middleware
 

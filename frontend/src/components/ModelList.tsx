@@ -6,7 +6,8 @@ import { display, encodeKeyPart, keyText } from "../format";
 import { paths } from "../paths";
 import type { AdminRecord, FieldMeta, Labels, ModelMeta } from "../types";
 import { ForeignKeyPicker } from "./ForeignKeyPicker";
-import { RoleSelect, useCanManageRoles } from "./RoleSelect";
+import { useCanManageRoles } from "../user";
+import { RoleSelect } from "./RoleSelect";
 import { Button, Card, ErrorBanner, Spinner, useToast } from "./ui";
 
 const NULL_FILTER = "__null__";

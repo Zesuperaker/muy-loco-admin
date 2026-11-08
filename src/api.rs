@@ -1,6 +1,7 @@
 //! JSON API handlers.
 
 use std::{
+    borrow::Cow,
     collections::{BTreeMap, HashMap},
     sync::{
         Arc,
@@ -25,7 +26,7 @@ use serde_json::{Map, Value as JsonValue, json};
 
 use crate::{
     auth::{AdminAuth, AdminUser, LoginMethod, UserRoles},
-    error::{AdminError, AdminResult, FieldErrors},
+    error::{AdminError, AdminResult},
     meta::{Capabilities, ModelMeta},
     query::{ListParams, MAX_PER_PAGE},
     resource::{CsvStream, Record, Resource},
@@ -113,32 +114,38 @@ impl AdminState {
         Ok(model)
     }
 
-    /// Whether only users with full access may set `field` of `model`: the
-    /// users' role column, and the other columns that decide who may use
-    /// the admin.
-    fn is_protected(&self, model: &Model, field: &str) -> bool {
-        self.0.roles.as_ref().is_some_and(|roles| {
-            roles.table == model.meta.table
-                && (roles.column == field || roles.protected.iter().any(|p| p == field))
-        })
+    /// Fields of `model` the user may not set although the model allows it:
+    /// for a user with a role, the users' role column and the other columns
+    /// that decide who may use the admin.
+    fn locked(&self, model: &Model, access: &Access) -> Vec<String> {
+        match &self.0.roles {
+            Some(roles) if !access.is_full() && roles.table == model.meta.table => {
+                std::iter::once(&roles.column)
+                    .chain(&roles.protected)
+                    .cloned()
+                    .collect()
+            }
+            _ => Vec::new(),
+        }
     }
 
     /// `model` as the user sees it, or `None` if they may not view it: with
-    /// a role, its capabilities and actions are narrowed, protected fields
-    /// are read-only, and links to models the role cannot view are dropped,
-    /// so foreign keys to them are edited as plain values.
-    fn visible(&self, model: &Model, access: &Access) -> Option<ModelMeta> {
+    /// a role, its capabilities and actions are narrowed, locked fields are
+    /// read-only, and links to models the role cannot view are dropped, so
+    /// foreign keys to them are edited as plain values.
+    fn visible<'a>(&self, model: &'a Model, access: &Access) -> Option<Cow<'a, ModelMeta>> {
         if access.is_full() {
-            return Some(model.meta.clone());
+            return Some(Cow::Borrowed(&model.meta));
         }
         let caps = access.capabilities(&model.meta);
         if !caps.view {
             return None;
         }
         let viewable = |name: &str| self.model(name).is_some_and(|m| access.can_view(&m.meta));
+        let locked = self.locked(model, access);
         let mut meta = model.meta.clone();
         for field in &mut meta.fields {
-            if self.is_protected(model, &field.name) {
+            if locked.contains(&field.name) {
                 field.readonly = true;
             }
             if let Some(rel) = &mut field.relation
@@ -155,33 +162,7 @@ impl AdminState {
             update: caps.update && editable,
             ..caps
         };
-        Some(meta)
-    }
-
-    /// Refuse writes by a user with a role to the fields only users with full
-    /// access may set, as for other read-only fields.
-    fn check_protected(
-        &self,
-        model: &Model,
-        access: &Access,
-        input: &Map<String, JsonValue>,
-    ) -> AdminResult<()> {
-        if access.is_full() {
-            return Ok(());
-        }
-        let fields: FieldErrors = input
-            .keys()
-            .filter(|name| self.is_protected(model, name))
-            .map(|name| (name.clone(), vec!["is read-only".to_string()]))
-            .collect();
-        if fields.is_empty() {
-            Ok(())
-        } else {
-            Err(AdminError::Validation {
-                message: "some fields are invalid".to_string(),
-                fields,
-            })
-        }
+        Some(Cow::Owned(meta))
     }
 
     /// The users' role settings, if the user may manage roles: roles are on
@@ -245,6 +226,14 @@ impl FromRequestParts<AdminState> for Authed {
         let user = state.0.auth.authenticate(&state.0.ctx, parts).await?;
         let access = match user.role {
             None => Access::Full,
+            // Without `AdminAuth::roles` the admin does not know the role
+            // column, so nothing would stop the user from changing their own
+            // role.
+            Some(_) if state.0.roles.is_none() => {
+                return Err(AdminError::Internal(
+                    "the user has a role, but `AdminAuth::roles` returns `None`".to_string(),
+                ));
+            }
             // A role that no longer exists grants nothing.
             Some(id) => Access::Role(
                 roles::find(&state.0.ctx.db, id)
@@ -390,7 +379,7 @@ async fn sign_out(LocoSession(session): LocoSession) -> Response {
 }
 
 async fn schema(State(state): State<AdminState>, Authed { access, .. }: Authed) -> Json<JsonValue> {
-    let models: Vec<ModelMeta> = state
+    let models: Vec<Cow<'_, ModelMeta>> = state
         .0
         .models
         .iter()
@@ -425,19 +414,19 @@ async fn fk_labels(
 ) -> AdminResult<BTreeMap<String, BTreeMap<String, String>>> {
     let mut out = BTreeMap::new();
     for field in &model.meta.fields {
-        let values: Vec<JsonValue> = records
-            .iter()
-            .filter_map(|r| r.values.get(&field.name).cloned())
-            .filter(|v| !v.is_null())
-            .collect();
-        if values.is_empty() {
-            continue;
-        }
-        if field.role {
-            let ids = values
+        let values = || {
+            records
                 .iter()
+                .filter_map(|r| r.values.get(&field.name))
+                .filter(|v| !v.is_null())
+        };
+        if field.role {
+            let ids: Vec<i64> = values()
                 .filter_map(|v| v.as_i64().or_else(|| v.as_str()?.parse().ok()))
                 .collect();
+            if ids.is_empty() {
+                continue;
+            }
             let names = roles::names(&state.0.ctx.db, ids).await?;
             out.insert(
                 field.name.clone(),
@@ -456,6 +445,10 @@ async fn fk_labels(
             continue;
         };
         if !access.can_view(&target.meta) {
+            continue;
+        }
+        let values: Vec<JsonValue> = values().cloned().collect();
+        if values.is_empty() {
             continue;
         }
         let labels = target
@@ -511,8 +504,11 @@ async fn create(
 ) -> AdminResult<Response> {
     let model = state.authorize(&access, &name, Operation::Create)?;
     let input = body(input)?;
-    state.check_protected(model, &access, &input)?;
-    let record = model.resource.create(&state.0.ctx.db, input).await?;
+    let locked = state.locked(model, &access);
+    let record = model
+        .resource
+        .create(&state.0.ctx.db, input, &locked)
+        .await?;
     let json = record_response(&state, model, &access, &record).await?;
     Ok((StatusCode::CREATED, json).into_response())
 }
@@ -525,8 +521,11 @@ async fn update(
 ) -> AdminResult<Json<JsonValue>> {
     let model = state.authorize(&access, &name, Operation::Update)?;
     let input = body(input)?;
-    state.check_protected(model, &access, &input)?;
-    let record = model.resource.update(&state.0.ctx.db, &key, input).await?;
+    let locked = state.locked(model, &access);
+    let record = model
+        .resource
+        .update(&state.0.ctx.db, &key, input, &locked)
+        .await?;
     record_response(&state, model, &access, &record).await
 }
 

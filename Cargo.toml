@@ -34,7 +34,7 @@ sea-orm = { version = "2.0", default-features = false, features = [
     "with-uuid",
     "with-rust_decimal",
 ] }
-# `muy_loco_admin::migrations`: the roles table, added to the app's `Migrator`.
+# `muy_loco_admin::migrations::roles`: the roles table, added to the app's `Migrator`.
 sea-orm-migration = { version = "2.0", default-features = false }
 axum = { version = "0.8.1", default-features = false, features = ["json", "query"] }
 async-trait = "0.1.74"

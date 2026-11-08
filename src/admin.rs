@@ -258,8 +258,27 @@ impl Admin {
     /// Build the admin router, to be nested at [`Admin::mount_path`].
     ///
     /// The initializer does this for you; use it to mount the admin by hand.
+    /// Unlike the initializer, it does not check the database: with roles
+    /// on, call [`Admin::check_database`] too, or a missing roles table only
+    /// shows up as failing requests.
     pub fn router(&self, ctx: &AppContext) -> loco_rs::Result<Router> {
         self.build(ctx, &Settings::default())
+    }
+
+    /// Check that the database has what the admin needs: with roles on, the
+    /// roles table and the users' role column. The initializer runs this
+    /// when mounting; call it after [`Admin::router`] when mounting by hand.
+    ///
+    /// # Errors
+    ///
+    /// When roles are on and their migration has not run.
+    pub async fn check_database(&self, ctx: &AppContext) -> loco_rs::Result<()> {
+        match self.auth.roles() {
+            Some(users) => roles::check_tables(&ctx.db, &users)
+                .await
+                .map_err(|e| Error::string(&e)),
+            None => Ok(()),
+        }
     }
 
     /// The validated mount path.
@@ -274,7 +293,7 @@ impl Admin {
         let mut names = std::collections::HashSet::new();
         for resource in &self.resources {
             let meta = resource.meta();
-            if meta.table == ROLES_TABLE {
+            if user_roles.is_some() && meta.table == ROLES_TABLE {
                 // Roles would be editable by anyone allowed to edit the
                 // model, including users limited by a role.
                 return Err(Error::string(&format!(
@@ -416,11 +435,7 @@ impl Initializer for Admin {
             return Ok(router);
         }
         let admin = self.build(ctx, &settings)?;
-        if let Some(users) = self.auth.roles() {
-            roles::check_tables(&ctx.db, &users)
-                .await
-                .map_err(|e| Error::string(&e))?;
-        }
+        self.check_database(ctx).await?;
         let path = settings.path.as_deref().unwrap_or(&self.path);
         let mount = validate_path(path).map_err(|e| Error::string(&e))?;
         tracing::info!(path = %mount, models = self.resources.len(), "admin mounted");

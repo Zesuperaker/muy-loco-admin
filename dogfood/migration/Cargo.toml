@@ -11,7 +11,7 @@ path = "src/lib.rs"
 
 [dependencies]
 loco-rs = { workspace = true }
-# `muy_loco_admin::migrations`: the admin's roles table.
+# `muy_loco_admin::migrations::roles`: the admin's roles table.
 muy-loco-admin = { workspace = true }
 
 [dependencies.sea-orm-migration]

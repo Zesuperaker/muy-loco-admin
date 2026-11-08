@@ -26,6 +26,7 @@ export function FieldInput({
         <RoleSelect
           id={id}
           value={value}
+          label={fkLabel}
           disabled={disabled}
           emptyLabel="No role (full access)"
           onChange={onChange}

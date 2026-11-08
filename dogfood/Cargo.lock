@@ -1202,7 +1202,6 @@ dependencies = [
 name = "dogfood"
 version = "0.1.0"
 dependencies = [
- "async-trait",
  "axum",
  "chrono",
  "include_dir",
@@ -1220,8 +1219,6 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "ts-rs",
- "uuid",
- "validator",
 ]
 
 [[package]]

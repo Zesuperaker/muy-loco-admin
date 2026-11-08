@@ -1,4 +1,3 @@
-use async_trait::async_trait;
 use loco_rs::{
     app::{AppContext, Hooks, Initializer},
     bgworker::{BackgroundWorker, Queue},
@@ -7,6 +6,7 @@ use loco_rs::{
     controller::AppRoutes,
     db::{self, truncate_table},
     environment::Environment,
+    prelude::async_trait,
     task::Tasks,
     Result,
 };

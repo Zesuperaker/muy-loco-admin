@@ -1,8 +1,9 @@
+use loco_rs::prelude::async_trait;
 use sea_orm::entity::prelude::*;
 
 pub use super::_entities::categories::{ActiveModel, Entity, Model};
 
-#[async_trait::async_trait]
+#[async_trait]
 impl ActiveModelBehavior for ActiveModel {
     async fn before_save<C>(self, _db: &C, insert: bool) -> std::result::Result<Self, DbErr>
     where

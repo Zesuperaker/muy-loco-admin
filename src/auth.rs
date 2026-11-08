@@ -182,7 +182,10 @@ mod jwt {
     use loco_rs::{
         app::AppContext,
         auth::jwt::JWT,
-        controller::extractor::auth::{extract_token, extract_token_from_header},
+        config::{JWT as JwtConfig, JWTLocation, JWTLocationConfig},
+        controller::extractor::auth::{
+            extract_token_from_cookie, extract_token_from_header, extract_token_from_query,
+        },
         model::{Authenticable, ModelError},
     };
 
@@ -192,15 +195,40 @@ mod jwt {
     type Check<U> = Arc<dyn Fn(&U) -> bool + Send + Sync>;
     type Name<U> = Arc<dyn Fn(&U) -> String + Send + Sync>;
 
+    /// The tokens a request carries, in the order they are tried: the
+    /// `Authorization: Bearer` header first, since a client only sends it on
+    /// purpose while browsers send cookies on their own, then each location
+    /// configured in `auth.jwt.location`.
+    fn tokens(config: &JwtConfig, parts: &Parts) -> Vec<String> {
+        let configured: Vec<&JWTLocation> = match &config.location {
+            Some(JWTLocationConfig::Single(location)) => vec![location],
+            Some(JWTLocationConfig::Multiple(locations)) => locations.iter().collect(),
+            None => Vec::new(),
+        };
+        let others = configured
+            .into_iter()
+            .filter_map(|location| match location {
+                JWTLocation::Bearer => None,
+                JWTLocation::Query { name } => extract_token_from_query(name, parts).ok(),
+                JWTLocation::Cookie { name } => extract_token_from_cookie(name, parts).ok(),
+            });
+        extract_token_from_header(&parts.headers)
+            .ok()
+            .into_iter()
+            .chain(others)
+            .collect()
+    }
+
     /// Authenticates with Loco's JWT auth (`auth.jwt` in the config).
     ///
     /// The admin UI signs in through the app's login endpoint and trades the
     /// token for a Loco session cookie, so the browser never stores the
-    /// token. Scripts can send the token instead: it is read from the
-    /// locations configured in `auth.jwt.location` and from the
-    /// `Authorization: Bearer` header, and wins over a session. Either way the
-    /// user is loaded by `pid` with [`Authenticable::find_by_claims_key`] and
-    /// must pass the `allow` check on every request.
+    /// token. Scripts can send the token instead, as `Authorization: Bearer`
+    /// or in the locations configured in `auth.jwt.location`, tried in that
+    /// order. The first token that validates is used and wins over a session;
+    /// one that does not, such as an expired cookie, is skipped. Either way
+    /// the user is loaded by `pid` with [`Authenticable::find_by_claims_key`]
+    /// and must pass the `allow` check on every request.
     ///
     /// The session is the app's own: the admin reads its user id as the
     /// user's `pid`, so the app must sign users in with their `pid` too, and
@@ -275,17 +303,15 @@ mod jwt {
             let config = ctx.config.get_jwt_config().map_err(|_| {
                 AuthError::Internal("JwtAuth requires `auth.jwt` in the Loco config".to_string())
             })?;
-            let pid = match extract_token(config, parts)
-                .or_else(|_| extract_token_from_header(&parts.headers))
-            {
-                Ok(token) => {
-                    JWT::new(&config.secret)
-                        .validate(&token)
-                        .map_err(|_| AuthError::Unauthenticated)?
-                        .claims
-                        .pid
-                }
-                Err(_) => session::user_id(ctx, parts)
+            let jwt = JWT::new(&config.secret);
+            // A token that does not validate is skipped rather than rejected,
+            // so a stale cookie cannot lock out a valid token or session.
+            let valid = tokens(config, parts)
+                .iter()
+                .find_map(|token| jwt.validate(token).ok());
+            let pid = match valid {
+                Some(data) => data.claims.pid,
+                None => session::user_id(ctx, parts)
                     .await
                     .map_err(|err| AuthError::Internal(err.to_string()))?
                     .ok_or(AuthError::Unauthenticated)?,

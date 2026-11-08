@@ -39,5 +39,7 @@ cd dogfood && docker compose up --build -d && cd e2e && npm test
   release-please derives versions and `CHANGELOG.md` from them. Never edit the crate version by
   hand.
 - Name branches `<type>/<topic>`, with a Conventional Commits type and a short kebab-case topic
-  (`feat/site-link`, `fix/export-timeout`), not generated or session names.
+  (`feat/site-link`, `fix/export-timeout`), not generated or session names. This means that rather than committing to your current branch which you can't rename or delete rather make commits to this other properly named branch.
+- Once work is completed and you have created a PR you should run 2 sub agents one using the security review skill and the other using the general code review skill. You should then highlight any validated findings to the user.
+- PR descriptions should be concise bullets and in a format in which release please will be able to record each change individually in the changelog.
 - Keep `README.md` and this file short.

@@ -42,6 +42,8 @@ export interface FieldMeta {
   max_length?: number;
   choices?: string[];
   relation?: RelationMeta;
+  /** The users' role column: picked from the roles. */
+  role?: boolean;
 }
 
 export interface Capabilities {
@@ -94,6 +96,31 @@ export interface AdminConfig {
 export interface AdminUser {
   id: string;
   name: string;
+  /** The user's role; `null` for full access. */
+  role?: { id: number; name: string } | null;
+  /** Roles are on and the user has full access. */
+  can_manage_roles?: boolean;
+}
+
+/** What a role may do with one model. Any other permission implies `view`. */
+export interface Grant {
+  view: boolean;
+  create: boolean;
+  update: boolean;
+  delete: boolean;
+  export: boolean;
+  actions: string[];
+}
+
+/** Model name to what the role may do with it; models not listed are hidden. */
+export type Permissions = Record<string, Grant>;
+
+export interface Role {
+  id: number;
+  name: string;
+  permissions: Permissions;
+  /** How many users have the role. */
+  users: number;
 }
 
 export interface AdminRecord {

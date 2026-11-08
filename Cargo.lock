@@ -2119,6 +2119,7 @@ dependencies = [
  "percent-encoding",
  "rust-embed",
  "sea-orm",
+ "sea-orm-migration",
  "serde",
  "serde_json",
  "thiserror 2.0.21",

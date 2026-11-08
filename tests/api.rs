@@ -111,7 +111,10 @@ async fn config_is_public() {
 async fn me_returns_the_user() {
     let (_db, _ctx, client) = client().await;
     let body = client.get("/api/me").await.json();
-    assert_eq!(body, json!({"id": "anonymous", "name": "Anonymous"}));
+    assert_eq!(
+        body,
+        json!({"id": "anonymous", "name": "Anonymous", "role": null, "can_manage_roles": false})
+    );
 }
 
 #[tokio::test]
@@ -238,6 +241,7 @@ async fn fields_put_the_key_first_and_timestamps_last() {
             "email",
             "name",
             "is_admin",
+            "admin_role_id",
             "created_at",
             "updated_at"
         ]

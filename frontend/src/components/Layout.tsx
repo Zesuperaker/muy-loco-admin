@@ -44,6 +44,25 @@ export function Layout({
             </NavLink>
           ))}
         </nav>
+        {user.can_manage_roles && (
+          <nav
+            aria-label="Settings"
+            className="flex flex-row flex-wrap gap-1 border-t border-slate-200 px-3 py-3 md:flex-col"
+          >
+            <NavLink
+              to={paths.roles()}
+              className={({ isActive }) =>
+                `rounded-md px-3 py-1.5 text-sm ${
+                  isActive
+                    ? "bg-indigo-50 font-medium text-indigo-700"
+                    : "text-slate-600 hover:bg-slate-100"
+                }`
+              }
+            >
+              Roles
+            </NavLink>
+          </nav>
+        )}
       </aside>
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex items-center justify-end gap-3 border-b border-slate-200 bg-white px-6 py-3 text-sm">
@@ -56,6 +75,14 @@ export function Layout({
             </a>
           )}
           <span className="text-slate-500">{user.name}</span>
+          {user.role && (
+            <span
+              title="Your role"
+              className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600"
+            >
+              {user.role.name}
+            </span>
+          )}
           <Button variant="ghost" onClick={onSignOut}>
             Sign out
           </Button>

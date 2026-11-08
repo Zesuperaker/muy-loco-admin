@@ -1,9 +1,10 @@
 //! Authentication hooks.
 //!
 //! Every admin API request is authenticated through an [`AdminAuth`]
-//! implementation. A user it lets in may use the whole admin: what can be
-//! done to each model is set per model with
-//! [`ModelAdmin`](crate::ModelAdmin), the same for every admin user.
+//! implementation. A user it lets in without a role may use the whole admin;
+//! one with a [role](crate::migrations) may only do what the role grants.
+//! What can be done to each model at most is set per model with
+//! [`ModelAdmin`](crate::ModelAdmin).
 
 use async_trait::async_trait;
 use axum::http::request::Parts;
@@ -19,16 +20,42 @@ pub struct AdminUser {
     pub id: String,
     /// The name shown in the UI.
     pub name: String,
+    /// The user's role (an `admin_roles` id), or `None` for full access.
+    pub role: Option<i64>,
 }
 
 impl AdminUser {
+    /// A user with full access.
     #[must_use]
     pub fn new(id: impl Into<String>, name: impl Into<String>) -> Self {
         Self {
             id: id.into(),
             name: name.into(),
+            role: None,
         }
     }
+
+    /// Limit the user to role `role` (an `admin_roles` id), or give them
+    /// full access with `None`. A role that does not exist lets them do
+    /// nothing.
+    #[must_use]
+    pub fn with_role(mut self, role: Option<i64>) -> Self {
+        self.role = role;
+        self
+    }
+}
+
+/// Where an [`AdminAuth`] keeps each user's role; returning it from
+/// [`AdminAuth::roles`] turns roles on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UserRoles {
+    /// The users table, as passed to [`migrations`](crate::migrations).
+    pub table: String,
+    /// The column holding each user's role, `admin_role_id`.
+    pub column: String,
+    /// Other columns that decide who may use the admin, such as `is_admin`.
+    /// Like the role column, only users with full access may change them.
+    pub protected: Vec<String>,
 }
 
 /// Why authentication failed.
@@ -100,7 +127,8 @@ pub enum LoginMethod {
 /// Authenticates admin requests.
 ///
 /// Implement this to plug in any authentication scheme. Return an
-/// [`AdminUser`] only for users who may use the whole admin.
+/// [`AdminUser`] only for users who may use the admin, with their role if
+/// they have one ([`AdminUser::with_role`]).
 #[async_trait]
 pub trait AdminAuth: Send + Sync + 'static {
     /// Authenticate the request described by `parts`.
@@ -109,6 +137,12 @@ pub trait AdminAuth: Send + Sync + 'static {
     /// How the UI should sign users in.
     fn login(&self) -> LoginMethod {
         LoginMethod::None
+    }
+
+    /// Where users' roles are kept, if roles are on. Users with full access
+    /// can then manage roles in the UI and assign them on the users table.
+    fn roles(&self) -> Option<UserRoles> {
+        None
     }
 
     /// Called once when the admin is mounted. An error stops the app from
@@ -188,12 +222,32 @@ mod jwt {
         },
         model::{Authenticable, ModelError},
     };
+    use sea_orm::{
+        ColumnTrait, EntityName, EntityTrait, IdenStatic, ModelTrait, Value, sea_query::ColumnType,
+    };
 
-    use super::{AdminAuth, AdminUser, AuthError, FormLogin, LoginMethod};
+    use super::{AdminAuth, AdminUser, AuthError, FormLogin, LoginMethod, UserRoles};
     use crate::session;
 
     type Check<U> = Arc<dyn Fn(&U) -> bool + Send + Sync>;
     type Name<U> = Arc<dyn Fn(&U) -> String + Send + Sync>;
+    type ReadRole<U> = Arc<dyn Fn(&U) -> Result<Option<i64>, String> + Send + Sync>;
+
+    struct Roles<U> {
+        read: ReadRole<U>,
+        columns: UserRoles,
+        /// Why the role column cannot hold roles, reported when mounting.
+        error: Option<String>,
+    }
+
+    /// A role id read from the role column.
+    fn role_id(value: &Value) -> Result<Option<i64>, String> {
+        match value {
+            Value::BigInt(id) => Ok(*id),
+            Value::Int(id) => Ok(id.map(i64::from)),
+            other => Err(format!("the role column holds {other:?}, not a role id")),
+        }
+    }
 
     /// The tokens a request carries, in the order they are tried: the
     /// `Authorization: Bearer` header first, since a client only sends it on
@@ -243,6 +297,7 @@ mod jwt {
         allow: Check<U>,
         name: Option<Name<U>>,
         login: LoginMethod,
+        roles: Option<Roles<U>>,
     }
 
     impl<U> JwtAuth<U>
@@ -257,6 +312,7 @@ mod jwt {
                 allow: Arc::new(allow),
                 name: None,
                 login: LoginMethod::Form(FormLogin::default()),
+                roles: None,
             }
         }
 
@@ -286,6 +342,55 @@ mod jwt {
             };
             form.endpoint = endpoint.into();
             self.login = LoginMethod::Form(form);
+            self
+        }
+    }
+
+    impl<U> JwtAuth<U>
+    where
+        U: Authenticable + ModelTrait + Send + Sync + 'static,
+    {
+        /// Turn on roles. `role` is the column
+        /// [`migrations`](crate::migrations) added to the users table;
+        /// `access` lists the columns `allow` reads, such as `is_admin`.
+        /// Users with full access can then manage roles and assign them; only
+        /// they may change `role` and `access`, so a user with a role cannot
+        /// hand out access. A role that can edit users can still change their
+        /// other columns, such as a full admin's email.
+        ///
+        /// ```rust,ignore
+        /// JwtAuth::<users::Model>::new(|user| user.is_admin)
+        ///     .roles(users::Column::AdminRoleId, [users::Column::IsAdmin])
+        /// ```
+        #[must_use]
+        pub fn roles(
+            mut self,
+            role: <U::Entity as EntityTrait>::Column,
+            access: impl IntoIterator<Item = <U::Entity as EntityTrait>::Column>,
+        ) -> Self {
+            let def = role.def();
+            let error = (!matches!(def.get_column_type(), ColumnType::BigInteger)
+                || !def.is_null())
+            .then(|| {
+                format!(
+                    "the role column `{}` must be the nullable bigint column that \
+                     `muy_loco_admin::migrations` adds; run `cargo loco db entities` after \
+                     migrating",
+                    role.as_str()
+                )
+            });
+            self.roles = Some(Roles {
+                read: Arc::new(move |user: &U| role_id(&user.get(role))),
+                columns: UserRoles {
+                    table: U::Entity::default().table_name().to_string(),
+                    column: role.as_str().to_string(),
+                    protected: access
+                        .into_iter()
+                        .map(|column| column.as_str().to_string())
+                        .collect(),
+                },
+                error,
+            });
             self
         }
     }
@@ -325,15 +430,43 @@ mod jwt {
             if !(self.allow)(&user) {
                 return Err(AuthError::Forbidden);
             }
+            let role = match &self.roles {
+                Some(roles) => (roles.read)(&user).map_err(AuthError::Internal)?,
+                None => None,
+            };
             let name = self
                 .name
                 .as_ref()
                 .map_or_else(|| pid.clone(), |name| name(&user));
-            Ok(AdminUser::new(pid, name))
+            Ok(AdminUser::new(pid, name).with_role(role))
         }
 
         fn login(&self) -> LoginMethod {
             self.login.clone()
+        }
+
+        fn roles(&self) -> Option<UserRoles> {
+            self.roles.as_ref().map(|roles| roles.columns.clone())
+        }
+
+        fn check(&self, _ctx: &AppContext) -> loco_rs::Result<()> {
+            match self.roles.as_ref().and_then(|roles| roles.error.as_ref()) {
+                Some(error) => Err(loco_rs::Error::string(error)),
+                None => Ok(()),
+            }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn role_ids_are_read_from_integer_columns() {
+            assert_eq!(role_id(&Value::BigInt(Some(4))), Ok(Some(4)));
+            assert_eq!(role_id(&Value::BigInt(None)), Ok(None));
+            assert_eq!(role_id(&Value::Int(Some(2))), Ok(Some(2)));
+            assert!(role_id(&Value::String(Some("x".into()))).is_err());
         }
     }
 }

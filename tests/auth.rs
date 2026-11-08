@@ -64,7 +64,12 @@ async fn jwt_auth_flow() {
     let me = staff_client.get("/api/me").await.json();
     assert_eq!(
         me,
-        json!({"id": staff.pid.to_string(), "name": "staff@example.com"})
+        json!({
+            "id": staff.pid.to_string(),
+            "name": "staff@example.com",
+            "role": null,
+            "can_manage_roles": false
+        })
     );
 
     // Every admin user may do everything the models allow.

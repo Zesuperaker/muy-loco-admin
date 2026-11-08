@@ -11,10 +11,11 @@ default-run = "dogfood-cli"
 
 [workspace.dependencies]
 loco-rs = { version = "=1.3.0" }
+muy-loco-admin = { version = "=0.1.1", path = ".." } # x-release-please-version
 
 [dependencies]
 loco-rs = { workspace = true }
-muy-loco-admin = { version = "=0.1.1", path = ".." } # x-release-please-version
+muy-loco-admin = { workspace = true }
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = { version = "=1.0.154" }
 tokio = { version = "=1.54.1", default-features = false, features = ["rt-multi-thread"] }

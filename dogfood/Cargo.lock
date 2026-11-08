@@ -2357,6 +2357,7 @@ name = "migration"
 version = "0.1.0"
 dependencies = [
  "loco-rs",
+ "muy-loco-admin",
  "sea-orm-migration",
 ]
 
@@ -2433,6 +2434,7 @@ dependencies = [
  "percent-encoding",
  "rust-embed",
  "sea-orm",
+ "sea-orm-migration",
  "serde",
  "serde_json",
  "thiserror 2.0.21",

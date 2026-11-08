@@ -391,6 +391,7 @@ where
                     column: c.clone(),
                     model: None,
                 }),
+                role: false,
             });
             columns.push(Column {
                 col: *col,

@@ -13,7 +13,7 @@ pub struct Migrator;
 #[async_trait::async_trait]
 impl MigratorTrait for Migrator {
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
-        vec![
+        let mut migrations: Vec<Box<dyn MigrationTrait>> = vec![
             Box::new(m20220101_000001_users::Migration),
             Box::new(m20261105_005058_add_is_admin_to_users::Migration),
             Box::new(m20261105_005106_categories::Migration),
@@ -21,6 +21,8 @@ impl MigratorTrait for Migrator {
             Box::new(m20261105_010000_tags::Migration),
             Box::new(m20261105_010100_article_tags::Migration),
             // inject-above (do not remove this comment)
-        ]
+        ];
+        migrations.extend(muy_loco_admin::migrations("users"));
+        migrations
     }
 }

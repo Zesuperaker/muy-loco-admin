@@ -1,5 +1,6 @@
 import type { FieldMeta } from "../types";
 import { ForeignKeyPicker } from "./ForeignKeyPicker";
+import { RoleSelect } from "./RoleSelect";
 
 export function FieldInput({
   field,
@@ -18,6 +19,21 @@ export function FieldInput({
 }) {
   const id = `field-${field.name}`;
   const common = { id, disabled, className: "input", name: field.name };
+
+  if (field.role) {
+    return (
+      <div className="flex flex-col gap-1">
+        <RoleSelect
+          id={id}
+          value={value}
+          disabled={disabled}
+          emptyLabel="No role (full access)"
+          onChange={onChange}
+        />
+        <p className="text-xs text-slate-500">Admins without a role have full access.</p>
+      </div>
+    );
+  }
 
   if (field.relation?.model && onPick) {
     return (

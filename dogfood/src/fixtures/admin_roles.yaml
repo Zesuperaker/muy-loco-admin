@@ -1,0 +1,8 @@
+---
+# Can write and publish articles, but cannot see users: an article's author
+# is a plain id field for this role.
+- id: 1
+  name: Editor
+  permissions: '{"articles":{"view":true,"create":true,"update":true,"delete":false,"export":false,"actions":["publish"]},"article_tags":{"view":true,"create":true,"update":false,"delete":true,"export":false,"actions":[]},"categories":{"view":true,"create":false,"update":false,"delete":false,"export":false,"actions":[]},"tags":{"view":true,"create":false,"update":false,"delete":false,"export":false,"actions":[]}}'
+  created_at: "2023-11-12T12:34:56.789Z"
+  updated_at: "2023-11-12T12:34:56.789Z"

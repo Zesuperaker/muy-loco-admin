@@ -76,7 +76,12 @@ async fn the_login_form_trades_its_token_for_a_session_cookie() {
     assert_eq!(res.status, 200);
     assert_eq!(
         res.json(),
-        json!({"id": staff.pid.to_string(), "name": "staff@example.com"})
+        json!({
+            "id": staff.pid.to_string(),
+            "name": "staff@example.com",
+            "role": null,
+            "can_manage_roles": false
+        })
     );
     let cookie = set_cookie(&res);
     assert!(cookie.starts_with("loco_session="), "{cookie}");

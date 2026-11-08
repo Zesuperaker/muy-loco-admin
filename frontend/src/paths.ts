@@ -5,4 +5,7 @@ export const paths = {
   create: (model: string) => `/models/${encodeURIComponent(model)}/new`,
   record: (model: string, key: string) =>
     `/models/${encodeURIComponent(model)}/records/${encodeURIComponent(key)}`,
+  roles: () => "/roles",
+  newRole: () => "/roles/new",
+  role: (id: number) => `/roles/${id}`,
 };

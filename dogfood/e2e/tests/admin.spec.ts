@@ -10,8 +10,8 @@ async function signIn(page: Page, email = "user1@example.com") {
   await page.getByRole("button", { name: "Sign in" }).click();
 }
 
-async function signedIn(page: Page, path: string) {
-  await signIn(page);
+async function signedIn(page: Page, path: string, email?: string) {
+  await signIn(page, email);
   await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible();
   await page.goto(path);
 }
@@ -51,7 +51,7 @@ test("links back to the site", async ({ page }) => {
 test("shows record counts on the dashboard", async ({ page }) => {
   await signIn(page);
   await expect(page.getByTestId("count-articles")).toHaveText("12");
-  await expect(page.getByTestId("count-users")).toHaveText("2");
+  await expect(page.getByTestId("count-users")).toHaveText("3");
   await expect(page.getByTestId("count-article_tags")).toHaveText("8");
 });
 
@@ -171,7 +171,7 @@ test("edits a composite-key record", async ({ page }) => {
 
 test("keeps users read-only for creation and signs out", async ({ page }) => {
   await signedIn(page, "/admin/models/users");
-  await expect(page.getByText("2 total")).toBeVisible();
+  await expect(page.getByText("3 total")).toBeVisible();
   await expect(page.getByRole("link", { name: "Add record" })).toHaveCount(0);
   await page.getByRole("button", { name: "Sign out" }).click();
   await expect(page.getByText("Sign in to continue.")).toBeVisible();
@@ -189,4 +189,62 @@ test("keeps the session in an HttpOnly cookie that signing out ends", async ({ p
   await page.getByRole("button", { name: "Sign out" }).click();
   await expect(page.getByText("Sign in to continue.")).toBeVisible();
   expect((await request.get("/admin/api/me", { headers: copied })).status()).toBe(401);
+});
+
+test("limits a user to their role", async ({ page }) => {
+  await signedIn(page, "/admin", "editor@example.com");
+  await expect(page.getByTitle("Your role")).toHaveText("Editor");
+  const nav = page.getByRole("navigation", { name: "Models" });
+  await expect(nav.getByRole("link")).toHaveText(["Articles", "Categories", "Tags", "Article tags"]);
+  await expect(page.getByRole("link", { name: "Roles" })).toHaveCount(0);
+  await expect(page.getByTestId("count-users")).toHaveCount(0);
+
+  await page.goto("/admin/models/articles/records/3");
+  // The editor cannot view users, so the author is a plain id field.
+  await expect(page.getByLabel("User")).toHaveValue("2");
+  await expect(page.getByRole("button", { name: "Save" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Delete" })).toHaveCount(0);
+  await page.goto("/admin/models/users");
+  await expect(page.getByRole("heading", { name: "Not found" })).toBeVisible();
+});
+
+test("manages roles and assigns them", async ({ page }) => {
+  await signedIn(page, "/admin", "user1@example.com");
+  await page.getByRole("link", { name: "Roles" }).click();
+  await expect(page.locator("tbody tr", { hasText: "Editor" })).toContainText("1");
+
+  await page.getByRole("link", { name: "Add role" }).click();
+  await page.getByLabel("Name").fill("Support");
+  await page.getByLabel("Articles: Edit").check();
+  await expect(page.getByLabel("Articles: View")).toBeChecked();
+  await expect(page.getByRole("list", { name: "Warnings" })).toContainText(
+    "Articles › User will be a plain id field, because this role cannot view Users.",
+  );
+  const warnings = page.getByRole("list", { name: "Warnings" });
+  await expect(warnings).toContainText("Articles › Category will be a plain id field");
+  await page.getByLabel("Users: Edit").check();
+  await expect(warnings).not.toContainText("Articles › User");
+  await page.getByLabel("Categories: View").check();
+  await expect(warnings).toHaveCount(0);
+  await page.getByRole("button", { name: "Create" }).click();
+  await expect(page.getByText("Created Support")).toBeVisible();
+  const rolePage = page.url();
+
+  await page.goto("/admin/models/users/records/2");
+  await page.getByLabel("Admin role").selectOption("Support");
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect(page.getByText("Saved", { exact: true })).toBeVisible();
+  await page.goto(rolePage);
+  await expect(page.getByText("1 user has this role")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Delete" })).toBeDisabled();
+
+  await page.goto("/admin/models/users/records/2");
+  await page.getByLabel("Admin role").selectOption("No role (full access)");
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect(page.getByText("Saved", { exact: true })).toBeVisible();
+  await page.goto(rolePage);
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: "Delete" }).click();
+  await expect(page).toHaveURL(/\/admin\/roles$/);
+  await expect(page.getByText("Support")).toHaveCount(0);
 });

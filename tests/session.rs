@@ -317,3 +317,77 @@ async fn bearer_tokens_still_work_without_a_session() {
     assert_eq!(res.status, 200);
     assert!(res.header("set-cookie").is_none(), "scripts get no cookie");
 }
+
+#[tokio::test]
+async fn tokens_that_do_not_validate_are_skipped() {
+    let (db, ctx) = setup().await;
+    let client = Client::new(admin().router(&ctx).unwrap());
+    let staff = create_user(&db.db, "staff@example.com", true).await;
+    let session = sign_in(&client, &staff).await;
+    let foreign = JWT::new("YW5vdGhlci1hcHBzLWp3dC1zZWNyZXQtMDEyMzQ1Njc4OQ==") // another app's secret
+        .generate_token(3600, staff.pid.to_string(), Map::new())
+        .unwrap();
+    for bad in ["not-a-jwt", foreign.as_str()] {
+        let with_session = client
+            .clone()
+            .with_token(bad)
+            .send_raw(Method::GET, "/api/me", None, vec![("cookie", &session)])
+            .await;
+        assert_eq!(with_session.status, 200, "{bad}: the session still works");
+        let alone = client.clone().with_token(bad).get("/api/me").await;
+        assert_eq!(alone.status, 401, "{bad}: and lets no one in by itself");
+    }
+
+    // A token that validates still wins over the session.
+    let joe = create_user(&db.db, "joe@example.com", false).await;
+    let res = client
+        .clone()
+        .with_token(token(&joe.pid.to_string()))
+        .send_raw(Method::GET, "/api/me", None, vec![("cookie", &session)])
+        .await;
+    assert_eq!(res.status, 403);
+}
+
+#[tokio::test]
+async fn the_login_form_wins_over_a_token_cookie() {
+    let test_db = database().await;
+    let ctx = context(
+        &test_db,
+        Environment::Test,
+        &json!({"auth": {
+            "jwt": {
+                "secret": JWT_SECRET,
+                "expiration": 3600,
+                "location": {"from": "Cookie", "name": "auth_token"}
+            },
+            "session": {}
+        }}),
+    );
+    let client = Client::new(admin().router(&ctx).unwrap());
+    let staff = create_user(&test_db.db, "staff@example.com", true).await;
+    let joe = create_user(&test_db.db, "joe@example.com", false).await;
+    let stale = "auth_token=stale".to_string();
+    let other_user = format!("auth_token={}", token(&joe.pid.to_string()));
+    for cookie in [stale, other_user] {
+        let res = client
+            .clone()
+            .with_token(token(&staff.pid.to_string()))
+            .send_raw(
+                Method::POST,
+                "/api/session",
+                None,
+                vec![("cookie", &cookie)],
+            )
+            .await;
+        assert_eq!(res.status, 200, "{cookie}: {}", res.text());
+        let session = set_cookie(&res).split(';').next().unwrap().to_string();
+        let me = send(
+            &client,
+            Method::GET,
+            "/api/me",
+            &format!("{session}; auth_token=stale"),
+        )
+        .await;
+        assert_eq!(me.json()["id"], staff.pid.to_string(), "{cookie}");
+    }
+}

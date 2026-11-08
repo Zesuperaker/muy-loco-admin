@@ -226,7 +226,6 @@ async fn config(State(state): State<AdminState>) -> Json<JsonValue> {
         "base_path": state.0.base_path,
         "site_url": state.0.site_url,
         "login": state.0.auth.login(),
-        "version": env!("CARGO_PKG_VERSION"),
     }))
 }
 

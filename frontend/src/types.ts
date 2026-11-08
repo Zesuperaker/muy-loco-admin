@@ -89,7 +89,6 @@ export interface AdminConfig {
   /** Target of the "Visit site" link; `null` hides it. */
   site_url: string | null;
   login: LoginMethod;
-  version: string;
 }
 
 export interface AdminUser {

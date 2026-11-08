@@ -121,7 +121,8 @@ fn validate_path(path: &str) -> Result<String, String> {
 
 /// The "Visit site" link's target: empty (no link), a path on this host or an
 /// `http(s)` URL, so a configured value cannot become a `javascript:` link or
-/// a protocol-relative one (`//host`).
+/// a protocol-relative one (`//host`). Backslashes are refused too: browsers
+/// read them as `/` in web URLs, so `/\host` is protocol-relative as well.
 fn validate_site_url(url: &str) -> Result<Option<String>, String> {
     let url = url.trim();
     if url.is_empty() {
@@ -132,7 +133,8 @@ fn validate_site_url(url: &str) -> Result<Option<String>, String> {
         url.get(..scheme.len())
             .is_some_and(|prefix| prefix.eq_ignore_ascii_case(scheme))
     });
-    if (local || web) && !url.chars().any(|c| c.is_control() || c.is_whitespace()) {
+    let unsafe_char = |c: char| c.is_control() || c.is_whitespace() || c == '\\';
+    if (local || web) && !url.chars().any(unsafe_char) {
         Ok(Some(url.to_string()))
     } else {
         Err(format!(
@@ -451,6 +453,10 @@ mod tests {
             "javascript:alert(1)",
             "data:text/html,x",
             "//evil.example",
+            "/\\evil.example",
+            "/\\/evil.example",
+            "/a\\b",
+            "https://x.test\\@evil.example",
             "example.com",
             "https",
             "/a b",

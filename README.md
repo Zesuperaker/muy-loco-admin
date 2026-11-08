@@ -144,7 +144,7 @@ For production:
 ```yaml
 auth:
   session:
-    secret: <%= get_env(name="SESSION_SECRET") %> # required outside development and test
+    secret: <%= get_env(name="SESSION_SECRET") %> # required in release builds
     cookie_name: __Host-loco_session # needs https; stops subdomains planting a session
     store: database # sign-out ends the session on the server
 ```
@@ -157,9 +157,10 @@ app changes a password:
 loco_rs::auth::session_store::sign_out_everywhere(&ctx, &user.pid.to_string()).await?;
 ```
 
-The admin refuses to mount when the login form could not work: no secret outside development and
-test, a `__Host-` or `__Secure-` cookie without `Secure`, or a server-side store without Loco's
-`auth_session` middleware.
+The admin refuses to mount when the login form could not work or would be unsafe: no secret
+(Loco's public development default is accepted only in a debug build in development or test,
+like `AllowAll`), a `__Host-` or `__Secure-` cookie without `Secure`, or a server-side store
+without Loco's `auth_session` middleware.
 
 ## Middleware
 

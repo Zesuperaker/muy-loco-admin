@@ -2,7 +2,7 @@ mod common;
 
 use common::{create_user, setup, users};
 use loco_rs::task::{Tasks, Vars};
-use muy_loco_admin::PromoteAdmin;
+use muy_loco_admin::{AdminModels, PromoteAdmin};
 use sea_orm::EntityTrait;
 
 fn email(value: &str) -> Vars {
@@ -66,4 +66,28 @@ async fn promote_admin_sets_the_flag() {
         "{unknown}"
     );
     assert!(!is_admin(ann.id).await);
+}
+
+#[tokio::test]
+async fn admin_models_is_registered_and_reports_missing_entities() {
+    let (_db, ctx) = setup().await;
+    let mut tasks = Tasks::default();
+    tasks.register(AdminModels::new().entities("src/models/_entities"));
+    let info = &tasks.list()[0];
+    assert_eq!(info.name, "admin:models");
+    assert!(info.detail.contains("src/admin.rs"), "{}", info.detail);
+
+    // The crate has no `src/models/_entities`, so the run stops before
+    // writing anything, even to the crate's own `src/admin.rs`.
+    let before = std::fs::read_to_string("src/admin.rs").unwrap();
+    let err = tasks
+        .run(&ctx, "admin:models", &Vars::default())
+        .await
+        .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("run `cargo loco db entities` first"),
+        "{err}"
+    );
+    assert_eq!(std::fs::read_to_string("src/admin.rs").unwrap(), before);
 }

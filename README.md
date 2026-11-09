@@ -2,6 +2,7 @@
 
 [![crates.io](https://img.shields.io/crates/v/muy-loco-admin.svg)](https://crates.io/crates/muy-loco-admin)
 [![docs.rs](https://img.shields.io/docsrs/muy-loco-admin)](https://docs.rs/muy-loco-admin)
+[![CI](https://img.shields.io/github/actions/workflow/status/Zesuperaker/muy-loco-admin/release.yml?branch=main&label=CI)](https://github.com/Zesuperaker/muy-loco-admin/actions/workflows/release.yml?query=branch%3Amain)
 [![License](https://img.shields.io/crates/l/muy-loco-admin.svg)](LICENSE)
 
 An admin dashboard for [Loco](https://loco.rs) apps, generated at runtime from your SeaORM

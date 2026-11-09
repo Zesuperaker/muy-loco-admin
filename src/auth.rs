@@ -289,7 +289,7 @@ mod jwt {
     /// any way the app signs a user in also opens the admin to admin users.
     ///
     /// ```rust,ignore
-    /// JwtAuth::<users::Model>::new(|user| user.is_admin)
+    /// JwtAuth::<users::Model>::new(|user| user.is_admin == Some(true))
     ///     .login_endpoint("/api/auth/login")
     ///     .display_name(|user| user.email.clone())
     /// ```
@@ -359,7 +359,7 @@ mod jwt {
         /// other columns, such as a full admin's email.
         ///
         /// ```rust,ignore
-        /// JwtAuth::<users::Model>::new(|user| user.is_admin)
+        /// JwtAuth::<users::Model>::new(|user| user.is_admin == Some(true))
         ///     .roles(users::Column::AdminRoleId, [users::Column::IsAdmin])
         /// ```
         #[must_use]

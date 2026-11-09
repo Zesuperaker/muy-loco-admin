@@ -48,9 +48,9 @@ pub const CONFIG_KEY: &str = "admin";
 /// ```rust,ignore
 /// async fn initializers(_ctx: &AppContext) -> Result<Vec<Box<dyn Initializer>>> {
 ///     Ok(vec![Box::new(
-///         Admin::new(JwtAuth::<users::Model>::new(|user| user.is_admin))
+///         Admin::new(JwtAuth::<users::Model>::new(|user| user.is_admin == Some(true)))
 ///             .register(ModelAdmin::<users::Entity>::new().can_create(false))
-///             .model::<posts::Entity>()
+///             .model::<articles::Entity>()
 ///             .middlewares_from::<Self>(),
 ///     )])
 /// }

@@ -85,6 +85,8 @@
 //! use loco_rs::app::AppContext;
 //! use sea_orm::{ActiveModelTrait, ActiveValue, IntoActiveModel};
 //!
+//! use crate::models::articles::ArticleStatus;
+//!
 //! ModelAdmin::<articles::Entity>::new().action(
 //!     "publish",  // name, unique per model
 //!     "Publish",  // button label
@@ -92,7 +94,8 @@
 //!         let count = articles.len();
 //!         for article in articles {
 //!             let mut article = article.into_active_model();
-//!             article.published = ActiveValue::Set(true);
+//!             article.status = ActiveValue::Set(ArticleStatus::Published);
+//!             article.published_at = ActiveValue::Set(Some(chrono::Utc::now().into()));
 //!             article.update(&ctx.db).await?;
 //!         }
 //!         Ok(format!("Published {count} articles"))
@@ -126,7 +129,8 @@
 //! | [`Admin::site_url`] | `/` |
 //! | [`Admin::export_idle_timeout`] | 60 s; a CSV download that stalls this long is stopped and its transaction rolled back |
 //!
-//! To mount the admin yourself instead of as an initializer, see [`Admin::router`].
+//! To mount the admin yourself instead of as an initializer, see [`Admin::router`]; the
+//! `initializers.admin` config does not apply then.
 //!
 //! # Authentication
 //!
@@ -207,6 +211,11 @@
 //!
 //! [`AuthError::Unauthenticated`] shows the login screen and [`AuthError::Forbidden`] tells the
 //! user their account has no admin access.
+//!
+//! The admin checks the session settings only when it shows its login form. If your
+//! `AdminAuth` reads Loco's session, set a session secret of your own (see
+//! [Deploying to production](#deploying-to-production)): without one, Loco signs sessions with a
+//! public default outside the `production` environment, and anyone could forge one.
 //!
 //! ## Requests from other sites
 //!
@@ -311,7 +320,9 @@
 //! - **Authentication**: use [`JwtAuth`](auth::JwtAuth) or your own [`AdminAuth`].
 //!   [`AllowAll`] refuses to start in a release build or outside `development` and `test`.
 //! - **Session secret**: set `auth.session.secret` to a long random value
-//!   (`openssl rand -base64 64`). Release builds refuse Loco's public development default.
+//!   (`openssl rand -base64 64`). With the login form, the admin accepts Loco's public
+//!   development default only in a debug build in the `development` or `test` environment, as
+//!   for [`AllowAll`].
 //! - **Cookie**: serve the app over `https://` and name the cookie `__Host-…`, which stops
 //!   subdomains planting a session.
 //! - **Server-side sessions**: use `store: database` so sign-out ends the session, keep Loco's
@@ -330,23 +341,27 @@
 //! # Troubleshooting
 //!
 //! The admin checks its setup when the app starts and refuses to mount if something would not
-//! work or would be unsafe. The error says what to change:
+//! work or would be unsafe. The error says what to change. The first three rows are checked
+//! only when the admin shows its login form.
 //!
 //! | The error mentions | Fix |
 //! | --- | --- |
-//! | `set auth.session.secret` | Set a session secret of your own (see [above](#deploying-to-production)). |
-//! | `session cookie unless it is Secure` | A `__Host-` or `__Secure-` cookie needs an `https://` `server.host`, or `auth.session.secure: true`. |
-//! | no `auth_session` middleware | A server-side session store needs Loco's `auth_session` middleware: keep it in `Hooks::middlewares` and use [`middlewares_from::<Self>()`](Admin::middlewares_from). |
+//! | `` set `auth.session.secret` `` | Set a session secret of your own (see [above](#deploying-to-production)). |
+//! | `` session cookie unless it is `Secure` `` | A `__Host-` or `__Secure-` cookie needs an `https://` `server.host`, or `auth.session.secure: true`. |
+//! | `` no `auth_session` middleware `` | A server-side session store needs Loco's `auth_session` middleware: keep it in `Hooks::middlewares` and use [`middlewares_from::<Self>()`](Admin::middlewares_from). |
 //! | `AllowAll lets anyone use the admin` | Use [`JwtAuth`](auth::JwtAuth) or your own [`AdminAuth`] outside local development. |
 //! | `unknown field` / `hidden field` | A [`ModelAdmin`] option names a column the entity lacks, or one that is hidden. |
 //! | `registered more than once` | Give one of the models a different [`name`](ModelAdmin::name). |
-//! | `roles need the admin_roles table` | Add [`migrations::roles`] to the app's `Migrator` and run `cargo loco db migrate`. |
+//! | `` roles need the `admin_roles` table `` | Add [`migrations::roles`] to the app's `Migrator` and run `cargo loco db migrate`. |
 //! | `must be the nullable bigint column` | Run `cargo loco db entities` after migrating. |
 //! | `cannot be registered` | Remove the `admin_roles` model; roles are managed on the Roles page. |
 //!
 //! If you can sign in but see "Your account does not have admin access", the user fails the
 //! [`JwtAuth`](auth::JwtAuth) check: run `cargo loco task admin:promote email:...` (see
 //! [`PromoteAdmin`]).
+
+// The guide links to `JwtAuth`, which only exists with the default `jwt` feature.
+#![cfg_attr(not(feature = "jwt"), allow(rustdoc::broken_intra_doc_links))]
 
 mod admin;
 mod api;

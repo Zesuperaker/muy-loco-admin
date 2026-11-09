@@ -5,8 +5,10 @@
 [![License](https://img.shields.io/crates/l/muy-loco-admin.svg)](LICENSE)
 
 An admin dashboard for [Loco](https://loco.rs) apps, generated at runtime from your SeaORM
-entities. Add it as an initializer and every model you register gets list, search, edit, export
-and per-role permissions, with nothing to build or serve separately.
+entities. Add it as an initializer and every model you register gets list, search, edit and
+export, with nothing to build or serve separately. Optional
+[roles](https://docs.rs/muy-loco-admin/latest/muy_loco_admin/#roles) limit what each admin user
+can do.
 
 ![The articles list in the admin](docs/screenshots/list.png)
 
@@ -26,7 +28,7 @@ and per-role permissions, with nothing to build or serve separately.
 - Foreign keys as links and searchable pickers, with links to related records
 - CSV export, streamed from one consistent snapshot
 - Composite and UUID primary keys, Postgres enums, JSON columns
-- Roles, managed in the UI, that limit what each admin user can do
+- Optional roles, managed in the UI, that limit what each admin user can do
 - Postgres and SQLite
 
 ## Quickstart
@@ -40,6 +42,7 @@ SaaS starter; for other apps, see [Not on the SaaS starter?](#not-on-the-saas-st
 > ```sh
 > cargo install loco
 > loco new --name myapp --db sqlite --bg async --assets serverside
+> cd myapp
 > ```
 >
 > Use `--db postgres` for Postgres.

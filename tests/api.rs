@@ -11,7 +11,6 @@ use serde_json::{Value, json};
 
 fn admin() -> Admin {
     Admin::new(AllowAll)
-        .title("Test Admin")
         .register(ModelAdmin::<users::Entity>::new().can_create(false))
         .register(
             ModelAdmin::<posts::Entity>::new()
@@ -97,7 +96,7 @@ async fn config_is_public() {
     let res = client.get("/api/config").await;
     assert_eq!(res.status, 200);
     let body = res.json();
-    assert_eq!(body["title"], "Test Admin");
+    assert_eq!(body["title"], "Muy Loco Admin");
     assert_eq!(body["base_path"], "/admin");
     assert_eq!(body["site_url"], "/");
     assert_eq!(body["login"]["type"], "none");

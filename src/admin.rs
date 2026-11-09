@@ -41,7 +41,6 @@ const SKIPPED_MIDDLEWARES: &[&str] = &["cors", "fallback", "static"];
 /// a remember-me token's user would sign anyone in as any user, admins
 /// included, so they cannot be registered as models.
 const SESSION_TABLES: &[&str] = &["loco_sessions", "loco_remember_tokens"];
-const DEFAULT_TITLE: &str = "Muy Loco Admin";
 const DEFAULT_SITE_URL: &str = "/";
 /// Key of the admin settings under `initializers:` in the Loco config.
 pub const CONFIG_KEY: &str = "admin";
@@ -66,18 +65,16 @@ pub const CONFIG_KEY: &str = "admin";
 /// `Hooks::middlewares` applies too; otherwise the stack configured under
 /// `server.middlewares` is used.
 ///
-/// The mount path, title and site URL can be overridden in the Loco config:
+/// The mount path and site URL can be overridden in the Loco config:
 ///
 /// ```yaml
 /// initializers:
 ///   admin:
 ///     enabled: true
 ///     path: /admin
-///     title: My App Admin
 ///     site_url: /
 /// ```
 pub struct Admin {
-    title: String,
     path: String,
     site_url: String,
     auth: Arc<dyn AdminAuth>,
@@ -95,7 +92,6 @@ type MiddlewareStack = fn(&AppContext) -> Vec<Box<dyn MiddlewareLayer>>;
 struct Settings {
     enabled: Option<bool>,
     path: Option<String>,
-    title: Option<String>,
     site_url: Option<String>,
 }
 
@@ -182,7 +178,6 @@ impl Admin {
     #[must_use]
     pub fn new(auth: impl AdminAuth) -> Self {
         Self {
-            title: DEFAULT_TITLE.to_string(),
             path: DEFAULT_PATH.to_string(),
             site_url: DEFAULT_SITE_URL.to_string(),
             auth: Arc::new(auth),
@@ -199,13 +194,6 @@ impl Admin {
     #[must_use]
     pub fn middlewares_from<H: Hooks>(mut self) -> Self {
         self.middlewares = H::middlewares;
-        self
-    }
-
-    /// Title shown in the UI.
-    #[must_use]
-    pub fn title(mut self, title: impl Into<String>) -> Self {
-        self.title = title.into();
         self
     }
 
@@ -368,7 +356,6 @@ impl Admin {
         let user_roles = self.auth.roles();
         let path = settings.path.as_deref().unwrap_or(&self.path);
         let base_path = validate_path(path).map_err(|e| Error::string(&e))?;
-        let title = settings.title.as_deref().unwrap_or(&self.title);
         let site_url = validate_site_url(settings.site_url.as_deref().unwrap_or(&self.site_url))
             .map_err(|e| Error::string(&e))?;
 
@@ -384,7 +371,6 @@ impl Admin {
             })
             .collect();
         let state = AdminState(Arc::new(Inner {
-            title: title.to_string(),
             site_url,
             export_idle_timeout: self.export_idle_timeout,
             base_path,

@@ -297,7 +297,8 @@ export function ModelList({ model, models }: { model: ModelMeta; models: ModelMe
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold">{model.label}</h1>
-          {count.data && (
+          {/* A previous search's count would not match the rows on screen. */}
+          {count.data && !count.isPlaceholderData && (
             <p className="text-sm text-slate-500" title={countNote(count.data.count)}>
               {formatCount(count.data.count)} total
             </p>

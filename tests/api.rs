@@ -1418,6 +1418,10 @@ async fn pages_walk_every_record_once_in_any_order() {
         .unwrap();
     }
 
+    // Timestamps the database writes, as Loco's default for `created_at`
+    // does, which SQLite keeps as text in another format than sqlx writes.
+    insert_posts(&db.db, ann.id, 4).await;
+
     let mut lists = vec!["/api/models/posts/records?".to_string()];
     for field in [
         "id",
@@ -1638,4 +1642,49 @@ async fn search_matches_other_fields_by_value() {
         .await
         .json();
     assert_eq!(body["choices"][0]["value"], ann.id);
+}
+
+/// A fixed-length text column, which Postgres pads with spaces.
+mod codes {
+    use sea_orm::entity::prelude::*;
+
+    #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
+    #[sea_orm(table_name = "codes")]
+    pub struct Model {
+        #[sea_orm(primary_key)]
+        pub id: i32,
+        #[sea_orm(column_type = "Char(Some(5))")]
+        pub code: String,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
+#[tokio::test]
+async fn pages_walk_padded_text() {
+    let (db, ctx) = setup().await;
+    let schema = sea_orm::Schema::new(db.db.get_database_backend());
+    db.db
+        .execute(&schema.create_table_from_entity(codes::Entity))
+        .await
+        .unwrap();
+    db.db
+        .execute_unprepared(
+            "INSERT INTO codes (code) VALUES ('ab'), ('ab'), ('ab'), ('ab'), ('ab'), ('cd'), ('cd')",
+        )
+        .await
+        .unwrap();
+    let router = Admin::new(AllowAll)
+        .model::<codes::Entity>()
+        .router(&ctx)
+        .await
+        .unwrap();
+    let client = Client::new(router);
+    for order in ["asc", "desc"] {
+        let list = format!("/api/models/codes/records?sort=code&order={order}");
+        assert_pages_walk(&client, &list, 2).await;
+    }
 }

@@ -124,6 +124,31 @@ describe("list state", () => {
     expect(currentLocation()).toBe("/models/posts?filter.views=5");
   });
 
+  it("hides the previous search's count until the new one arrives", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const { fetchMock } = mockFetch(
+      baseRoutes({
+        "GET /admin/api/models/posts/records": { body: pageOf([postRecord(1)]) },
+        "GET /admin/api/models/posts/count": (call) => ({
+          body: { count: { kind: "exact", value: call.url.includes("q=") ? 1 : 60 } },
+        }),
+      }),
+    );
+    const impl = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).includes("/count?q=")) await gate;
+      return impl(input, init);
+    });
+    const user = userEvent.setup();
+    renderApp("/admin/models/posts");
+    expect(await screen.findByText("60 total")).toBeInTheDocument();
+    await user.type(screen.getByLabelText("Search"), "rust{Enter}");
+    await waitFor(() => expect(screen.queryByText("60 total")).not.toBeInTheDocument());
+    release();
+    expect(await screen.findByText("1 total")).toBeInTheDocument();
+  });
+
   it("rows of the previous page cannot be selected while the next one loads", async () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => (release = resolve));

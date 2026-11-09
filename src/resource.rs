@@ -386,11 +386,14 @@ impl<E: EntityTrait> Sort<E> {
     }
 }
 
-/// Where a record is in a list: its sort value, and its values of the key
-/// columns that break ties.
+/// The record a page starts from: the condition that finds it, and whether
+/// its sort value is `NULL`. Pages compare the other records with its stored
+/// values in SQL: values read into Rust and bound again may not compare the
+/// same, such as SQLite timestamps that `CURRENT_TIMESTAMP` wrote and sqlx
+/// writes differently, or Postgres's space-padded `char(n)`.
 struct Anchor {
-    sort: Value,
-    keys: Vec<Value>,
+    key: Condition,
+    null: bool,
 }
 
 impl<E> ModelResource<E>
@@ -829,44 +832,33 @@ where
         select
     }
 
-    /// Where the record with `key` is in `sort` order, or `None` if there is
-    /// no such record.
+    /// The record with `key` as a page's starting point, or `None` if there
+    /// is no such record.
     async fn anchor(
         &self,
         db: &DatabaseConnection,
         sort: &Sort<E>,
         key: &str,
     ) -> AdminResult<Option<Anchor>> {
-        let Ok(cond) = self.key_condition(key) else {
+        let Ok(key) = self.key_condition(key) else {
             return Ok(None);
         };
-        let Some(model) = E::find().filter(cond.clone()).one(db).await? else {
+        let Some(model) = E::find().filter(key.clone()).one(db).await? else {
             return Ok(None);
         };
-        let sort_value = if sort.json {
-            // The text the list sorts by, which may differ from `to_json`'s.
-            let text: Option<Option<String>> = E::find()
-                .select_only()
-                .expr(sort.expr())
-                .filter(cond)
-                .into_tuple()
-                .one(db)
-                .await?;
-            Value::String(text.flatten())
-        } else {
-            model.get(sort.col)
-        };
+        let value = model.get(sort.col);
         Ok(Some(Anchor {
-            sort: sort_value,
-            keys: self.tiebreak(sort).map(|c| model.get(c)).collect(),
+            null: value == value.as_null(),
+            key,
         }))
     }
 
     /// The records after `anchor` in `sort` order, or level with it too if
     /// `inclusive`, as conditions on consecutive runs of the list: records
     /// with a sort value, and those without, in the order the database sorts
-    /// `NULL`s. Each run is one range of an index on the sort column and key,
-    /// which a single condition joined with `OR` would not be.
+    /// `NULL`s. Each compares the sort value and key as a row with the
+    /// anchor's, which an index on them serves; joined with `OR`, they would
+    /// not be one index range.
     fn after(
         &self,
         backend: DbBackend,
@@ -874,20 +866,26 @@ where
         anchor: &Anchor,
         inclusive: bool,
     ) -> Vec<Expr> {
-        let mut keys = Vec::new();
-        let mut key_values = Vec::new();
-        for (col, value) in self.tiebreak(sort).zip(&anchor.keys) {
-            keys.push(Expr::col((E::default(), col)));
-            // Postgres enums compare only with values cast to their type.
-            key_values.push(col.save_as(Expr::val(value.clone())));
-        }
+        // The same columns of the anchor's stored row.
+        let stored = |exprs: &[Expr]| {
+            let mut select = Query::select();
+            select
+                .exprs(exprs.iter().cloned())
+                .from(E::default())
+                .cond_where(anchor.key.clone());
+            Expr::SubQuery(None, Box::new(select.into()))
+        };
+        let keys: Vec<Expr> = self
+            .tiebreak(sort)
+            .map(|c| Expr::col((E::default(), c)))
+            .collect();
         let sorted = sort.expr();
-        if anchor.sort == anchor.sort.as_null() {
+        if anchor.null {
             // Key columns are never NULL, so the sort column is not one, and
             // the key alone orders the records with no sort value.
             let nulls = sorted.clone().is_null().and(sort.later(
-                Expr::tuple(keys),
-                Expr::tuple(key_values),
+                Expr::tuple(keys.clone()),
+                stored(&keys),
                 inclusive,
             ));
             if sort.nulls_first(backend) {
@@ -896,17 +894,9 @@ where
                 vec![nulls]
             }
         } else {
-            let value = Expr::val(anchor.sort.clone());
-            keys.insert(0, sorted.clone());
-            key_values.insert(
-                0,
-                if sort.json {
-                    value
-                } else {
-                    sort.col.save_as(value)
-                },
-            );
-            let values = sort.later(Expr::tuple(keys), Expr::tuple(key_values), inclusive);
+            let mut row = vec![sorted.clone()];
+            row.extend(keys);
+            let values = sort.later(Expr::tuple(row.clone()), stored(&row), inclusive);
             if sort.nullable && !sort.nulls_first(backend) {
                 vec![values, sorted.is_null()]
             } else {

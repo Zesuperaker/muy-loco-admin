@@ -93,11 +93,18 @@
 //! new table never appears in the admin until you run the task, and the lines it adds show up in
 //! your diff.
 //!
-//! The task finds an entity in the file by its `name::Entity` path, commented out or not. It
-//! skips the admin's own `admin_roles` table. A model with a required hidden column, such as
-//! `users.password`, is added with `can_create(false)`, since its records could not be created
-//! from the admin. [`AdminModels::entities`] and [`AdminModels::output`] change where the task
-//! reads and writes.
+//! The task adds every table, so review the list and comment out any that admins should not
+//! edit, such as tables of tokens or keys. It never adds the admin's own `admin_roles` table or
+//! Loco's own `loco_*` tables, such as its session store. A model with a required hidden
+//! column, such as `users.password`, is added with `can_create(false)`, since its records could
+//! not be created from the admin. One whose primary key looks sensitive is added commented out,
+//! since the admin will not hide a primary key.
+//!
+//! The task finds an entity in the file by its `name::Entity` path, commented out or not, and
+//! looks nowhere else. Keep every registration in this file under that path: a model
+//! registered elsewhere, or under an alias such as the prelude's `Users`, would be added again.
+//! The task formats the file with `rustfmt` when it is installed. [`AdminModels::entities`] and
+//! [`AdminModels::output`] change where it reads and writes.
 //!
 //! # Model options
 //!
@@ -400,8 +407,10 @@
 //! | `` roles need the `admin_roles` table `` | Add [`migrations::roles`] to the app's `Migrator` and run `cargo loco db migrate`. |
 //! | `must be the nullable bigint column` | Run `cargo loco db entities` after migrating. |
 //! | `cannot be registered` | Remove the `admin_roles` model; roles are managed on the Roles page. |
+//! | `` holds Loco's sessions `` | Remove the `loco_sessions` or `loco_remember_tokens` model; editing sessions could sign anyone in as any user. |
 //! | `` run `cargo loco db entities` first `` | `admin:models` found no entities: generate them, or point [`AdminModels::entities`] at them. |
-//! | `` has no `// admin-models-inject `` | `admin:models` is writing to a file without the marker comment: add it after the models, or use [`AdminModels::output`]. |
+//! | `` has no `// admin-models-inject `` | `admin:models` is writing to a file without the marker comment: add it on a line of its own after the models, or use [`AdminModels::output`]. |
+//! | `put the marker on a line of its own` | Move the marker comment off the line with the last model. |
 //!
 //! If you can sign in but see "Your account does not have admin access", the user fails the
 //! [`JwtAuth`](auth::JwtAuth) check: run `cargo loco task admin:promote email:...` (see

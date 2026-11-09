@@ -110,8 +110,9 @@ impl AdminModels {
     }
 
     /// The file listing the models, relative to the project root and under
-    /// `src/` (defaults to `src/admin.rs`). Its module is declared in
-    /// `src/lib.rs` only when it is directly in `src/`.
+    /// `src/` (defaults to `src/admin.rs`). It must be a `.rs` file. Its
+    /// module is declared in `src/lib.rs` only when it is directly in `src/`,
+    /// so there it must be named after a module, not `lib.rs` or `mod.rs`.
     #[must_use]
     pub fn output(mut self, file: impl Into<PathBuf>) -> Self {
         self.output = file.into();
@@ -122,6 +123,13 @@ impl AdminModels {
     fn generate(&self, root: &Path) -> Result<Report> {
         let entities_dir = under_src(&self.entities, "entities directory")?;
         let output_parts = under_src(&self.output, "output file")?;
+        let top_module = output_module(&output_parts).map_err(|()| {
+            Error::string(&format!(
+                "the output file `{}` must be a `.rs` file named after its module, such as \
+                 `src/admin.rs`",
+                self.output.display()
+            ))
+        })?;
         let module_path = format!("crate::{}", entities_dir.join("::"));
         let alias = entities_dir.last().cloned().unwrap_or_default();
         let output_name = format!("src/{}", output_parts.join("/"));
@@ -159,8 +167,7 @@ impl AdminModels {
         if report.created || !report.added.is_empty() {
             report.formatted = rustfmt(root, &output_name);
         }
-        if let [module] = output_parts.as_slice() {
-            let module = module.strip_suffix(".rs").unwrap_or(module);
+        if let Some(module) = top_module {
             report.declared = declare_module(root, module)?;
         }
         Ok(report)
@@ -248,6 +255,26 @@ fn under_src(path: &Path, what: &str) -> Result<Vec<String>> {
     }
     parts.remove(0);
     Ok(parts)
+}
+
+/// The module the output file is when it is directly in `src/`, which
+/// `src/lib.rs` then declares. The file must be a `.rs` file, and one directly
+/// in `src/` must be named after a module other than the crate root's.
+fn output_module(parts: &[String]) -> std::result::Result<Option<&str>, ()> {
+    let file = parts.last().ok_or(())?;
+    let stem = file
+        .strip_suffix(".rs")
+        .filter(|s| !s.is_empty())
+        .ok_or(())?;
+    let [_] = parts else {
+        return Ok(None);
+    };
+    let identifier = !stem.starts_with(|c: char| c.is_ascii_digit())
+        && stem.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+    if !identifier || ["lib", "main", "mod"].contains(&stem) {
+        return Err(());
+    }
+    Ok(Some(stem))
 }
 
 /// The entity modules `mod.rs` in `dir` declares, in its order. Modules that
@@ -918,6 +945,32 @@ mod tests {
             err.contains("the output file `../admin.rs` must be"),
             "{err}"
         );
+
+        // A file `src/lib.rs` could not declare as a module is refused
+        // before anything is written.
+        let lib = project.read("src/lib.rs");
+        for file in [
+            "src/admin",
+            "src/.rs",
+            "src/mod.rs",
+            "src/lib.rs",
+            "src/main.rs",
+            "src/my-admin.rs",
+            "src/1admin.rs",
+        ] {
+            let err = generate(AdminModels::new().output(file));
+            assert!(
+                err.contains("must be a `.rs` file named after its module"),
+                "{file}: {err}"
+            );
+            assert!(
+                !project.0.join(file).is_file() || file == "src/lib.rs",
+                "{file}"
+            );
+        }
+        assert_eq!(project.read("src/lib.rs"), lib);
+        let nested = ["admin".to_string(), "mod.rs".to_string()];
+        assert_eq!(output_module(&nested), Ok(None));
     }
 
     #[test]

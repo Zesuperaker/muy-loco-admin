@@ -2,13 +2,10 @@
 
 [![crates.io](https://img.shields.io/crates/v/muy-loco-admin.svg)](https://crates.io/crates/muy-loco-admin)
 [![docs.rs](https://img.shields.io/docsrs/muy-loco-admin)](https://docs.rs/muy-loco-admin)
+[![CI](https://img.shields.io/github/actions/workflow/status/Zesuperaker/muy-loco-admin/release.yml?branch=main&label=CI)](https://github.com/Zesuperaker/muy-loco-admin/actions/workflows/release.yml?query=branch%3Amain)
 [![License](https://img.shields.io/crates/l/muy-loco-admin.svg)](LICENSE)
 
-An admin dashboard for [Loco](https://loco.rs) apps, generated at runtime from your SeaORM
-entities. Add it as an initializer and every model you register gets list, search, edit and
-export, with nothing to build or serve separately. Optional
-[roles](https://docs.rs/muy-loco-admin/latest/muy_loco_admin/#roles) limit what each admin user
-can do.
+An admin dashboard for [Loco](https://loco.rs) apps, generated from your SeaORM entities.
 
 ![The articles list in the admin](docs/screenshots/list.png)
 
@@ -19,17 +16,6 @@ can do.
 ![The role editor](docs/screenshots/roles.png)
 
 </details>
-
-## Features
-
-- Lists with pagination, sorting, search and filters
-- Create, edit and delete, plus bulk delete and your own bulk actions
-- Writes go through `ActiveModel`, so model hooks and validation run
-- Foreign keys as links and searchable pickers, with links to related records
-- CSV export, streamed from one consistent snapshot
-- Composite and UUID primary keys, Postgres enums, JSON columns
-- Optional roles, managed in the UI, that limit what each admin user can do
-- Postgres and SQLite
 
 ## Quickstart
 
@@ -127,6 +113,7 @@ The full guide is [on docs.rs](https://docs.rs/muy-loco-admin):
 
 | Topic | Covers |
 | --- | --- |
+| [Features](https://docs.rs/muy-loco-admin/latest/muy_loco_admin/#features) | what the admin can do |
 | [Registering models](https://docs.rs/muy-loco-admin/latest/muy_loco_admin/#registering-models) | `.model` and `.register`, foreign keys |
 | [Model options](https://docs.rs/muy-loco-admin/latest/muy_loco_admin/#model-options) | columns, search, filters, ordering, permissions |
 | [Custom actions](https://docs.rs/muy-loco-admin/latest/muy_loco_admin/#custom-actions) | bulk actions on selected records |

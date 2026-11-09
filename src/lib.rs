@@ -3,10 +3,6 @@
 //!
 //! ![The articles list in the admin](https://raw.githubusercontent.com/zesuperaker/muy-loco-admin/main/docs/screenshots/list.png)
 //!
-//! The admin reads entity metadata when the app starts and serves an embedded React UI, so
-//! there is nothing to build or serve separately. Writes go through `ActiveModel`, so model
-//! hooks and validation run as they do in app code.
-//!
 //! **New here?** The [Quickstart](https://github.com/zesuperaker/muy-loco-admin#quickstart)
 //! adds the admin to an app in five steps. This page is the guide to everything after that.
 //!
@@ -23,6 +19,18 @@
 //!     )])
 //! }
 //! ```
+//!
+//! # Features
+//!
+//! - Lists with pagination, sorting, search and filters
+//! - Create, edit and delete, plus bulk delete and [custom actions](#custom-actions)
+//! - Writes go through `ActiveModel`, so model hooks and validation run as they do in app code
+//! - Foreign keys as links and searchable pickers, with links to related records
+//! - CSV export, streamed from one consistent snapshot
+//! - Composite and UUID primary keys, Postgres enums, JSON columns
+//! - Optional [roles](#roles), managed in the UI, that limit what each admin user can do
+//! - Postgres and SQLite
+//! - The React UI is embedded in the crate, so there is nothing to build or serve separately
 //!
 //! # Registering models
 //!

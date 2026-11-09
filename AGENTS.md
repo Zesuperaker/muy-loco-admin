@@ -1,6 +1,7 @@
 # AGENTS.md
 
-Admin dashboard crate for Loco apps. See `README.md` for usage.
+Admin dashboard crate for Loco apps. `README.md` has the setup steps, the crate docs in `src/lib.rs`
+(published on docs.rs) the guide, and `CONTRIBUTING.md` the development workflow.
 
 ## Layout
 
@@ -10,18 +11,11 @@ Admin dashboard crate for Loco apps. See `README.md` for usage.
 - `tests/` crate integration tests; `tests/common` holds test entities and the HTTP client
 - `frontend/` React UI; `frontend/dist` is embedded with `rust-embed` and committed
 - `dogfood/` Loco app using the crate (Postgres, Docker); `dogfood/e2e/` Playwright tests
+- `docs/screenshots/` README and docs.rs screenshots, taken from the dogfood app
 
 ## Checks
 
-Run before committing; CI runs the same.
-
-```sh
-cargo fmt --check && cargo clippy --all-targets -- -D warnings
-cargo test                                   # SQLite; set DATABASE_URL=postgres://... for Postgres
-cd frontend && npm run lint && npm run typecheck && npm run coverage && npm run build
-cd dogfood && cargo fmt --all --check && cargo clippy --all-targets -- -D warnings && cargo test
-cd dogfood && docker compose up --build -d && cd e2e && npm test
-```
+Run the checks in `CONTRIBUTING.md` before committing; CI runs the same.
 
 ## Rules
 
@@ -42,4 +36,5 @@ cd dogfood && docker compose up --build -d && cd e2e && npm test
   (`feat/site-link`, `fix/export-timeout`), not generated or session names. This means that rather than committing to your current branch which you can't rename or delete rather make commits to this other properly named branch.
 - Once work is completed and you have created a PR you should run 2 sub agents one using the security review skill and the other using the general code review skill. You should then highlight any validated findings to the user.
 - PR descriptions should be concise bullets and in a format in which release please will be able to record each change individually in the changelog.
-- Keep `README.md` and this file short.
+- Keep `README.md` to setup steps and this file short; document everything else in the crate docs
+  (`src/lib.rs`), and keep them in step with code changes.

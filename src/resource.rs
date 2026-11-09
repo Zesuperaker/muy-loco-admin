@@ -164,7 +164,7 @@ fn single_column(identity: &sea_orm::Identity) -> Option<String> {
 }
 
 /// Whether a column name looks like it holds a credential.
-fn is_sensitive(name: &str) -> bool {
+pub(crate) fn is_sensitive(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     SENSITIVE.iter().any(|s| lower.contains(s))
 }

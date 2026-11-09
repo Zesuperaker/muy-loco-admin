@@ -1,7 +1,7 @@
 mod common;
 
 use axum::{Router, http::Method, routing::get};
-use common::{Client, context, database, posts, users};
+use common::{Client, context, database, loco_sessions, posts, users};
 use loco_rs::{app::Initializer, environment::Environment};
 use muy_loco_admin::{Admin, AllowAll, CONFIG_KEY};
 use serde_json::json;
@@ -176,4 +176,20 @@ async fn router_can_be_mounted_by_hand() {
     assert_eq!(res.json()["base_path"], "/ops/admin");
     assert_eq!(res.json()["site_url"], "/home");
     assert!(Admin::new(AllowAll).path("nope").mount_path().is_err());
+}
+
+#[tokio::test]
+async fn loco_session_tables_cannot_be_registered() {
+    let test_db = database().await;
+    let ctx = context(&test_db, Environment::Test, &json!({}));
+    let err = admin()
+        .model::<loco_sessions::Entity>()
+        .router(&ctx)
+        .await
+        .expect_err("session table registered");
+    assert!(
+        err.to_string()
+            .contains("the `loco_sessions` table holds Loco's sessions"),
+        "{err}"
+    );
 }

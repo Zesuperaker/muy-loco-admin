@@ -72,6 +72,7 @@ impl Hooks for App {
             users::Column::Email,
             users::Column::IsAdmin,
         ));
+        tasks.register(muy_loco_admin::AdminModels::new());
     }
     async fn truncate(ctx: &AppContext) -> Result<()> {
         truncate_table(&ctx.db, article_tags::Entity).await?;

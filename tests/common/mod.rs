@@ -154,6 +154,27 @@ pub mod admin_roles {
     impl ActiveModelBehavior for ActiveModel {}
 }
 
+/// Loco's `database` session store table, as `sea-orm-cli` generates it.
+pub mod loco_sessions {
+    use sea_orm::entity::prelude::*;
+
+    #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
+    #[sea_orm(table_name = "loco_sessions")]
+    pub struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub id_hash: String,
+        pub user_key: Option<String>,
+        #[sea_orm(column_type = "Text")]
+        pub data: String,
+        pub expires_at: i64,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
 pub mod posts {
     use sea_orm::entity::prelude::*;
 

@@ -37,6 +37,10 @@ const DEFAULT_EXPORT_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 /// signed-in user's session cookie; the admin UI never needs it, since it is
 /// always served from the same origin as its API.
 const SKIPPED_MIDDLEWARES: &[&str] = &["cors", "fallback", "static"];
+/// The tables of Loco's `database` session store. Editing a session's data or
+/// a remember-me token's user would sign anyone in as any user, admins
+/// included, so they cannot be registered as models.
+const SESSION_TABLES: &[&str] = &["loco_sessions", "loco_remember_tokens"];
 const DEFAULT_TITLE: &str = "Admin";
 const DEFAULT_SITE_URL: &str = "/";
 /// Key of the admin settings under `initializers:` in the Loco config.
@@ -289,6 +293,13 @@ impl Admin {
         let mut names = std::collections::HashSet::new();
         for resource in &self.resources {
             let meta = resource.meta();
+            if SESSION_TABLES.contains(&meta.table.as_str()) {
+                return Err(Error::string(&format!(
+                    "model `{}`: the `{}` table holds Loco's sessions, and editing it could sign \
+                     anyone in as any user, so it cannot be registered",
+                    meta.name, meta.table
+                )));
+            }
             if user_roles.is_some() && meta.table == ROLES_TABLE {
                 // Roles would be editable by anyone allowed to edit the
                 // model, including users limited by a role.

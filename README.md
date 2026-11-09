@@ -48,48 +48,55 @@ cargo loco db migrate
 cargo loco db entities
 ```
 
-### 3. Mount the admin
+### 3. Register the admin's tasks
 
-In `src/app.rs`, add the admin to the app's initializers and its `admin:promote` task to the
-app's tasks:
+In `src/app.rs`:
 
 ```rust
-use muy_loco_admin::{auth::JwtAuth, Admin, ModelAdmin, PromoteAdmin};
+use muy_loco_admin::{AdminModels, PromoteAdmin};
 
 // inside `impl Hooks for App`
-async fn initializers(_ctx: &AppContext) -> Result<Vec<Box<dyn Initializer>>> {
-    Ok(vec![
-        // ...the app's existing initializers
-        Box::new(
-            Admin::new(JwtAuth::<users::Model>::new(|user| user.is_admin == Some(true)))
-                .register(ModelAdmin::<users::Entity>::new().can_create(false))
-                // .model::<articles::Entity>()
-                .middlewares_from::<Self>(),
-        ),
-    ])
-}
-
 fn register_tasks(tasks: &mut Tasks) {
     // ...the app's existing tasks
     tasks.register(PromoteAdmin::new(users::Column::Email, users::Column::IsAdmin));
+    tasks.register(AdminModels::new());
 }
 ```
 
-Add a `.model::<…>()` line for each model you want to manage, or `.register(…)` one to
-[configure it](https://docs.rs/muy-loco-admin/latest/muy_loco_admin/#registering-models).
+### 4. List your models
 
-### 4. Create an admin user
+```sh
+cargo loco task admin:models
+```
+
+This writes `src/admin.rs`, which registers every model in `src/models/_entities`. Comment a line
+out to leave a model out, and run the task again after adding tables. See
+[generating the model list](https://docs.rs/muy-loco-admin/latest/muy_loco_admin/#generating-the-model-list).
+
+### 5. Mount the admin
+
+In `src/app.rs`:
+
+```rust
+use muy_loco_admin::{auth::JwtAuth, Admin};
+
+// inside `impl Hooks for App`
+async fn initializers(_ctx: &AppContext) -> Result<Vec<Box<dyn Initializer>>> {
+    let admin = Admin::new(JwtAuth::<users::Model>::new(|user| user.is_admin == Some(true)));
+    Ok(vec![
+        // ...the app's existing initializers
+        Box::new(crate::admin::models(admin).middlewares_from::<Self>()),
+    ])
+}
+```
+
+### 6. Create an admin user and sign in
 
 Skip `user:create` if you already have a user:
 
 ```sh
 cargo loco task user:create email:you@example.com name:You password:change-me
 cargo loco task admin:promote email:you@example.com
-```
-
-### 5. Sign in
-
-```sh
 cargo loco start
 ```
 
@@ -114,7 +121,7 @@ The full guide is [on docs.rs](https://docs.rs/muy-loco-admin):
 | Topic | Covers |
 | --- | --- |
 | [Features](https://docs.rs/muy-loco-admin/latest/muy_loco_admin/#features) | what the admin can do |
-| [Registering models](https://docs.rs/muy-loco-admin/latest/muy_loco_admin/#registering-models) | `.model` and `.register`, foreign keys |
+| [Registering models](https://docs.rs/muy-loco-admin/latest/muy_loco_admin/#registering-models) | generating the model list, `.model` and `.register`, foreign keys |
 | [Model options](https://docs.rs/muy-loco-admin/latest/muy_loco_admin/#model-options) | columns, search, filters, ordering, permissions |
 | [Custom actions](https://docs.rs/muy-loco-admin/latest/muy_loco_admin/#custom-actions) | bulk actions on selected records |
 | [Configuration](https://docs.rs/muy-loco-admin/latest/muy_loco_admin/#configuration) | path, title, "Visit site" link |

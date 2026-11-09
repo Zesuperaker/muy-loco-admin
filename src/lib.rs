@@ -4,7 +4,7 @@
 //! ![The articles list in the admin](https://raw.githubusercontent.com/zesuperaker/muy-loco-admin/main/docs/screenshots/list.png)
 //!
 //! **New here?** The [Quickstart](https://github.com/zesuperaker/muy-loco-admin#quickstart)
-//! adds the admin to an app in five steps. This page is the guide to everything after that.
+//! adds the admin to an app in a few steps. This page is the guide to everything after that.
 //!
 //! ```rust,ignore
 //! use muy_loco_admin::{auth::JwtAuth, Admin, ModelAdmin};
@@ -61,6 +61,50 @@
 //! A foreign key becomes a link and a searchable picker when the model it points to is
 //! registered too, and that model's records link back to the records that refer to them.
 //! Otherwise it is a plain id field.
+//!
+//! ## Generating the model list
+//!
+//! The [`AdminModels`] task writes the list for you. Register it with the app's tasks:
+//!
+//! ```rust,ignore
+//! // src/app.rs, inside `impl Hooks for App`
+//! fn register_tasks(tasks: &mut Tasks) {
+//!     tasks.register(AdminModels::new());
+//! }
+//! ```
+//!
+//! Then run `cargo loco task admin:models`. The first run creates `src/admin.rs`, with a
+//! `models` function that registers each entity in `src/models/_entities`, and declares the
+//! module in `src/lib.rs`. Pass the app's [`Admin`] through it:
+//!
+//! ```rust,ignore
+//! let admin = Admin::new(JwtAuth::<users::Model>::new(|user| user.is_admin == Some(true)));
+//! Box::new(crate::admin::models(admin).middlewares_from::<Self>())
+//! ```
+//!
+//! The file is yours to edit:
+//!
+//! - Comment a line out to leave that model out of the admin.
+//! - Change `.model::<…>()` to `.register(ModelAdmin::<…>::new()…)` to configure the model.
+//!
+//! After adding tables and running `cargo loco db entities`, run the task again. It adds a line
+//! for each entity the file does not mention yet, above the
+//! `// admin-models-inject (do not remove this comment)` line, and leaves the rest alone. So a
+//! new table never appears in the admin until you run the task, and the lines it adds show up in
+//! your diff.
+//!
+//! The task adds every table, so review the list and comment out any that admins should not
+//! edit, such as tables of tokens or keys. It never adds the admin's own `admin_roles` table or
+//! Loco's own `loco_*` tables, such as its session store. A model with a required hidden
+//! column, such as `users.password`, is added with `can_create(false)`, since its records could
+//! not be created from the admin. One whose primary key looks sensitive is added commented out,
+//! since the admin will not hide a primary key.
+//!
+//! The task finds an entity in the file by its `name::Entity` path, commented out or not, and
+//! looks nowhere else. Keep every registration in this file under that path: a model
+//! registered elsewhere, or under an alias such as the prelude's `Users`, would be added again.
+//! The task formats the file with `rustfmt` when it is installed. [`AdminModels::entities`] and
+//! [`AdminModels::output`] change where it reads and writes.
 //!
 //! # Model options
 //!
@@ -363,6 +407,10 @@
 //! | `` roles need the `admin_roles` table `` | Add [`migrations::roles`] to the app's `Migrator` and run `cargo loco db migrate`. |
 //! | `must be the nullable bigint column` | Run `cargo loco db entities` after migrating. |
 //! | `cannot be registered` | Remove the `admin_roles` model; roles are managed on the Roles page. |
+//! | `` holds Loco's sessions `` | Remove the `loco_sessions` or `loco_remember_tokens` model; editing sessions could sign anyone in as any user. |
+//! | `` run `cargo loco db entities` first `` | `admin:models` found no entities: generate them, or point [`AdminModels::entities`] at them. |
+//! | `` has no `// admin-models-inject `` | `admin:models` is writing to a file without the marker comment: add it on a line of its own after the models, or use [`AdminModels::output`]. |
+//! | `put the marker on a line of its own` | Move the marker comment off the line with the last model. |
 //!
 //! If you can sign in but see "Your account does not have admin access", the user fails the
 //! [`JwtAuth`](auth::JwtAuth) check: run `cargo loco task admin:promote email:...` (see
@@ -376,6 +424,7 @@ mod api;
 mod assets;
 pub mod auth;
 mod error;
+mod generate;
 mod meta;
 mod model;
 mod query;
@@ -389,6 +438,7 @@ pub use admin::{Admin, CONFIG_KEY};
 pub use api::{CSRF_HEADER, CSRF_VALUE};
 pub use auth::{AdminAuth, AdminUser, AllowAll, AuthError, FormLogin, LoginMethod, UserRoles};
 pub use error::{AdminError, FieldErrors};
+pub use generate::{AdminModels, MODELS_MARKER};
 pub use meta::{FieldKind, SortDirection};
 pub use model::{ActionResult, ModelAdmin};
 pub use query::{MAX_PER_PAGE, NOT_NULL_FILTER, NULL_FILTER};

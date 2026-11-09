@@ -41,7 +41,7 @@ async fn serves_the_ui_and_requires_admin_users() {
             .contains(r#"<meta name="mla-base" content="/admin" />"#));
 
         let config = request.get("/admin/api/config").await.json::<Value>();
-        assert_eq!(config["title"], "Dogfood Admin");
+        assert_eq!(config["title"], "Muy Loco Admin");
         assert_eq!(config["login"]["endpoint"], "/api/auth/login");
 
         assert_eq!(request.get("/admin/api/me").await.status_code(), 401);

@@ -36,6 +36,7 @@ async fn jwt_auth_flow() {
     let anonymous = Client::new(router.clone());
 
     let config = anonymous.get("/api/config").await.json();
+    assert_eq!(config["title"], "Muy Loco Admin", "the default title");
     assert_eq!(config["login"]["type"], "form");
     assert_eq!(config["login"]["endpoint"], "/api/auth/login");
 

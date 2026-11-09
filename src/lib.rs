@@ -170,14 +170,14 @@
 //!   admin:
 //!     enabled: true     # false leaves the admin unmounted
 //!     path: /admin
-//!     title: Admin
+//!     title: Muy Loco Admin
 //!     site_url: /       # the "Visit site" link: a path or http(s) URL; "" hides it
 //! ```
 //!
 //! | In code | Default |
 //! | --- | --- |
 //! | [`Admin::path`] | `/admin`; letters, digits, `-`, `_`, `.` and `~` between single slashes |
-//! | [`Admin::title`] | `Admin` |
+//! | [`Admin::title`] | `Muy Loco Admin` |
 //! | [`Admin::site_url`] | `/` |
 //! | [`Admin::export_idle_timeout`] | 60 s; a CSV download that stalls this long is stopped and its transaction rolled back |
 //!

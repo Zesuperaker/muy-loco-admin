@@ -41,7 +41,7 @@ const SKIPPED_MIDDLEWARES: &[&str] = &["cors", "fallback", "static"];
 /// a remember-me token's user would sign anyone in as any user, admins
 /// included, so they cannot be registered as models.
 const SESSION_TABLES: &[&str] = &["loco_sessions", "loco_remember_tokens"];
-const DEFAULT_TITLE: &str = "Admin";
+const DEFAULT_TITLE: &str = "Muy Loco Admin";
 const DEFAULT_SITE_URL: &str = "/";
 /// Key of the admin settings under `initializers:` in the Loco config.
 pub const CONFIG_KEY: &str = "admin";

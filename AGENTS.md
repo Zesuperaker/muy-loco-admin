@@ -15,16 +15,7 @@ Admin dashboard crate for Loco apps. `README.md` has the setup steps, the crate 
 
 ## Checks
 
-Run before committing; CI runs the same.
-
-```sh
-cargo fmt --check && cargo clippy --all-targets -- -D warnings
-RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
-cargo test                                   # SQLite; set DATABASE_URL=postgres://... for Postgres
-cd frontend && npm run lint && npm run typecheck && npm run coverage && npm run build
-cd dogfood && cargo fmt --all --check && cargo clippy --all-targets -- -D warnings && cargo test
-cd dogfood && docker compose up --build -d && cd e2e && npm test
-```
+Run the checks in `CONTRIBUTING.md` before committing; CI runs the same.
 
 ## Rules
 

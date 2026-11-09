@@ -13,24 +13,27 @@
 
 ## Checks
 
-CI runs these; run them, each from the repository root, before opening a pull request.
+CI runs these; run them from the repository root before opening a pull request.
 
 ```sh
-# Crate (SQLite; set DATABASE_URL=postgres://user:pass@localhost:5432/postgres for Postgres)
+# Crate
 cargo fmt --check && cargo clippy --all-targets -- -D warnings
 RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
-cargo test
+cargo test                                                            # SQLite
+DATABASE_URL=postgres://user:pass@localhost:5432/postgres cargo test  # Postgres
 
 # Frontend: after any UI change, commit the rebuilt frontend/dist
-cd frontend && npm ci && npm run lint && npm run typecheck && npm run coverage && npm run build
+(cd frontend && npm ci && npm run lint && npm run typecheck && npm run coverage && npm run build)
 
-# Dogfood app: Rust tests against a Postgres at DATABASE_URL
-# (default postgres://loco:loco@localhost:5432/dogfood_test)
-cd dogfood && cargo fmt --all --check && cargo clippy --all-targets -- -D warnings && cargo test
+# Dogfood app: Rust tests against a Postgres at DATABASE_URL, by default
+# postgres://loco:loco@localhost:5432/dogfood_test. The tests recreate its schema, so point
+# DATABASE_URL at a throwaway database, never one whose data you need.
+(cd dogfood && cargo fmt --all --check && cargo clippy --all-targets -- -D warnings && cargo test)
 
-# End-to-end
-cd dogfood && docker compose up --build -d
-cd dogfood/e2e && npm ci && npx playwright install chromium && npm test
+# End-to-end: --force-recreate restarts the app, which reseeds the data the tests expect
+(cd dogfood && docker compose up --build --force-recreate -d)
+until curl -fs http://localhost:5150/_ping >/dev/null; do sleep 2; done
+(cd dogfood/e2e && npm ci && npx playwright install chromium && npm test)
 ```
 
 CI keeps line coverage at or above 90% for the crate and 85% for the frontend.

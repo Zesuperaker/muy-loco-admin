@@ -15,14 +15,11 @@ use crate::models::{
 
 #[must_use]
 pub fn admin() -> Admin {
-    models(
-        Admin::new(
-            JwtAuth::<users::Model>::new(|user| user.is_admin)
-                .display_name(|user| user.email.clone())
-                .roles(users::Column::AdminRoleId, [users::Column::IsAdmin]),
-        )
-        .title("Dogfood Admin"),
-    )
+    models(Admin::new(
+        JwtAuth::<users::Model>::new(|user| user.is_admin)
+            .display_name(|user| user.email.clone())
+            .roles(users::Column::AdminRoleId, [users::Column::IsAdmin]),
+    ))
 }
 
 /// Registers the app's models on `admin`.

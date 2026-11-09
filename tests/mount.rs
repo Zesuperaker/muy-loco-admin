@@ -97,14 +97,13 @@ async fn embedded_assets_are_served() {
 }
 
 #[tokio::test]
-async fn config_overrides_path_title_and_site_url() {
+async fn config_overrides_path_and_site_url() {
     let test_db = database().await;
     let ctx = context(
         &test_db,
         Environment::Test,
         &json!({"initializers": {"admin": {
             "path": "/backoffice/",
-            "title": "Back office",
             "site_url": "https://example.com/",
         }}}),
     );
@@ -115,7 +114,6 @@ async fn config_overrides_path_title_and_site_url() {
         .unwrap();
     let client = Client::new(router);
     let res = client.get("/backoffice/api/config").await;
-    assert_eq!(res.json()["title"], "Back office");
     assert_eq!(res.json()["base_path"], "/backoffice");
     assert_eq!(res.json()["site_url"], "https://example.com/");
     assert_eq!(client.get("/admin/api/config").await.text(), "app fallback");
@@ -149,6 +147,7 @@ async fn invalid_config_is_rejected() {
     for settings in [
         json!({"pth": "/x"}),
         json!({"path": "/"}),
+        json!({"title": "Back office"}),
         json!({"site_url": "javascript:alert(1)"}),
         json!("yes"),
     ] {
@@ -168,11 +167,10 @@ async fn invalid_config_is_rejected() {
 async fn router_can_be_mounted_by_hand() {
     let test_db = database().await;
     let ctx = context(&test_db, Environment::Test, &json!({}));
-    let admin = admin().path("/ops/admin").title("Ops").site_url("/home");
+    let admin = admin().path("/ops/admin").site_url("/home");
     let path = admin.mount_path().unwrap();
     let router = Router::new().nest(&path, admin.router(&ctx).await.unwrap());
     let res = Client::new(router).get("/ops/admin/api/config").await;
-    assert_eq!(res.json()["title"], "Ops");
     assert_eq!(res.json()["base_path"], "/ops/admin");
     assert_eq!(res.json()["site_url"], "/home");
     assert!(Admin::new(AllowAll).path("nope").mount_path().is_err());

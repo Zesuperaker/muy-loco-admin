@@ -124,7 +124,7 @@ The full guide is [on docs.rs](https://docs.rs/muy-loco-admin):
 | [Registering models](https://docs.rs/muy-loco-admin/latest/muy_loco_admin/#registering-models) | generating the model list, `.model` and `.register`, foreign keys |
 | [Model options](https://docs.rs/muy-loco-admin/latest/muy_loco_admin/#model-options) | columns, search, filters, ordering, permissions |
 | [Custom actions](https://docs.rs/muy-loco-admin/latest/muy_loco_admin/#custom-actions) | bulk actions on selected records |
-| [Configuration](https://docs.rs/muy-loco-admin/latest/muy_loco_admin/#configuration) | path, title, "Visit site" link |
+| [Configuration](https://docs.rs/muy-loco-admin/latest/muy_loco_admin/#configuration) | path, "Visit site" link |
 | [Authentication](https://docs.rs/muy-loco-admin/latest/muy_loco_admin/#authentication) | `JwtAuth`, login form, your own `AdminAuth` |
 | [Sessions](https://docs.rs/muy-loco-admin/latest/muy_loco_admin/#sessions) | how the admin shares the app's session |
 | [Roles](https://docs.rs/muy-loco-admin/latest/muy_loco_admin/#roles) | limiting what each admin user can do |

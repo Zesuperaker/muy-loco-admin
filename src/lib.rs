@@ -170,16 +170,16 @@
 //!   admin:
 //!     enabled: true     # false leaves the admin unmounted
 //!     path: /admin
-//!     title: Admin
 //!     site_url: /       # the "Visit site" link: a path or http(s) URL; "" hides it
 //! ```
 //!
 //! | In code | Default |
 //! | --- | --- |
 //! | [`Admin::path`] | `/admin`; letters, digits, `-`, `_`, `.` and `~` between single slashes |
-//! | [`Admin::title`] | `Admin` |
 //! | [`Admin::site_url`] | `/` |
 //! | [`Admin::export_idle_timeout`] | 60 s; a CSV download that stalls this long is stopped and its transaction rolled back |
+//!
+//! The UI's title is always "Muy Loco Admin".
 //!
 //! To mount the admin yourself instead of as an initializer, see [`Admin::router`]; the
 //! `initializers.admin` config does not apply then.
@@ -402,6 +402,7 @@
 //! | `` session cookie unless it is `Secure` `` | A `__Host-` or `__Secure-` cookie needs an `https://` `server.host`, or `auth.session.secure: true`. |
 //! | `` no `auth_session` middleware `` | A server-side session store needs Loco's `auth_session` middleware: keep it in `Hooks::middlewares` and use [`middlewares_from::<Self>()`](Admin::middlewares_from). |
 //! | `AllowAll lets anyone use the admin` | Use [`JwtAuth`](auth::JwtAuth) or your own [`AdminAuth`] outside local development. |
+//! | `` invalid `initializers.admin` config `` | Use only the keys under [Configuration](#configuration); `title` was removed, as the title is always "Muy Loco Admin". |
 //! | `unknown field` / `hidden field` | A [`ModelAdmin`] option names a column the entity lacks, or one that is hidden. |
 //! | `registered more than once` | Give one of the models a different [`name`](ModelAdmin::name). |
 //! | `` roles need the `admin_roles` table `` | Add [`migrations::roles`] to the app's `Migrator` and run `cargo loco db migrate`. |

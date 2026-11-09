@@ -18,7 +18,7 @@ struct Dist;
 /// Placeholder for the mount path, written into `index.html` by the build.
 pub(crate) const BASE_PLACEHOLDER: &str = "/__MLA_BASE__";
 
-const NOT_BUILT: &str = "<!doctype html><html><head><meta charset=\"utf-8\"><title>Admin</title>\
+const NOT_BUILT: &str = "<!doctype html><html><head><meta charset=\"utf-8\"><title>Muy Loco Admin</title>\
                          </head><body><p>The admin UI has not been built. Run <code>npm ci &amp;&amp; \
                          npm run build</code> in <code>frontend/</code>.</p></body></html>";
 

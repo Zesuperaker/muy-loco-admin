@@ -51,7 +51,6 @@ pub(crate) struct Model {
 }
 
 pub(crate) struct Inner {
-    pub title: String,
     /// Target of the UI's "Visit site" link; `None` hides it.
     pub site_url: Option<String>,
     pub export_idle_timeout: Duration,
@@ -322,9 +321,12 @@ pub(crate) fn router() -> Router<AdminState> {
         .layer(from_fn(guard))
 }
 
+/// Title shown in the UI. It is fixed, like the `<title>` in `frontend/index.html`.
+const TITLE: &str = "Muy Loco Admin";
+
 async fn config(State(state): State<AdminState>) -> Json<JsonValue> {
     Json(json!({
-        "title": state.0.title,
+        "title": TITLE,
         "base_path": state.0.base_path,
         "site_url": state.0.site_url,
         "login": state.0.auth.login(),

@@ -1,5 +1,31 @@
 import { parseJson } from "./json";
-import type { FieldMeta, JsonValue } from "./types";
+import type { Count, FieldMeta, JsonValue } from "./types";
+
+const compact = new Intl.NumberFormat("en-US", { notation: "compact", maximumSignificantDigits: 2 });
+
+/** A record count: `1,234`, `10,000+` where counting stopped, `~1.2M` for an estimate. */
+export function formatCount(count: Count): string {
+  switch (count.kind) {
+    case "more_than":
+      return `${count.value.toLocaleString("en-US")}+`;
+    case "estimate":
+      return `~${compact.format(count.value)}`;
+    default:
+      return count.value.toLocaleString("en-US");
+  }
+}
+
+/** Why a count is not exact, for its tooltip. */
+export function countNote(count: Count): string | undefined {
+  switch (count.kind) {
+    case "more_than":
+      return `Counting stops at ${count.value.toLocaleString("en-US")} records`;
+    case "estimate":
+      return "Estimated from the database's statistics";
+    default:
+      return undefined;
+  }
+}
 
 const pad = (n: number) => String(n).padStart(2, "0");
 

@@ -364,7 +364,10 @@ async fn a_role_limits_what_a_user_sees() {
         false
     );
     let stats = client.get("/api/stats").await.json();
-    assert_eq!(stats["counts"], json!({"posts": 1, "post_tags": 0}));
+    assert_eq!(
+        stats["counts"],
+        json!({"posts": common::exact(1), "post_tags": common::exact(0)})
+    );
 
     // Labels of users are not shown.
     let list = client.get("/api/models/posts/records").await;

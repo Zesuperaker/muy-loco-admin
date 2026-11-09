@@ -300,6 +300,7 @@ pub(crate) fn router() -> Router<AdminState> {
         .route("/schema", get(schema))
         .route("/stats", get(stats))
         .route("/models/{model}/records", get(list).post(create))
+        .route("/models/{model}/count", get(count))
         .route(
             "/models/{model}/records/{key}",
             get(show).patch(update).put(update).delete(destroy),
@@ -390,6 +391,7 @@ async fn schema(State(state): State<AdminState>, Authed { access, .. }: Authed) 
     Json(json!({ "models": models }))
 }
 
+/// How many records each model the user may view has, for the dashboard.
 async fn stats(
     State(state): State<AdminState>,
     Authed { access, .. }: Authed,
@@ -399,7 +401,10 @@ async fn stats(
         if !access.can_view(&model.meta) {
             continue;
         }
-        let count = model.resource.count(&state.0.ctx.db).await?;
+        let count = model
+            .resource
+            .count(&state.0.ctx.db, &ListParams::default())
+            .await?;
         counts.insert(model.meta.name.clone(), count);
     }
     Ok(Json(json!({ "counts": counts })))
@@ -476,6 +481,20 @@ async fn list(
     let mut out = serde_json::to_value(&page).map_err(|e| AdminError::Internal(e.to_string()))?;
     out["labels"] = json!(labels);
     Ok(Json(out))
+}
+
+/// How many records match a list's search and filters. Lists fetch this
+/// apart from their pages, so paging does not count the records again.
+async fn count(
+    State(state): State<AdminState>,
+    Authed { access, .. }: Authed,
+    Path(name): Path<String>,
+    Query(query): Query<HashMap<String, String>>,
+) -> AdminResult<Json<JsonValue>> {
+    let model = state.authorize(&access, &name, Operation::View)?;
+    let params = ListParams::from_query(&query)?;
+    let count = model.resource.count(&state.0.ctx.db, &params).await?;
+    Ok(Json(json!({ "count": count })))
 }
 
 async fn record_response(

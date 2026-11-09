@@ -32,17 +32,18 @@ describe("basePath", () => {
 describe("listSearch", () => {
   it("builds query strings", () => {
     expect(listSearch({})).toBe("");
-    expect(listSearch({ page: 1 })).toBe("");
+    expect(listSearch({ after: "", before: "" })).toBe("");
+    expect(listSearch({ before: "a,b" })).toBe("?before=a%2Cb");
     expect(
       listSearch({
-        page: 2,
+        after: "7",
         per_page: 10,
         sort: "title",
         order: "desc",
         q: "a b",
         filters: { status: "draft", empty: "" },
       }),
-    ).toBe("?page=2&per_page=10&sort=title&order=desc&q=a+b&filter.status=draft");
+    ).toBe("?after=7&per_page=10&sort=title&order=desc&q=a+b&filter.status=draft");
   });
 });
 
@@ -67,6 +68,7 @@ describe("requests", () => {
     await api.lookup("users", "an", "id").catch(() => undefined);
     await api.lookup("users", "").catch(() => undefined);
     await api.list("posts", { q: "x" }).catch(() => undefined);
+    await api.count("posts", { after: "9", sort: "title", q: "x" }).catch(() => undefined);
     expect(calls.map((c) => `${c.method} ${c.url}`)).toEqual([
       "GET /admin/api/models/posts/records/1%2Ca%252Cb",
       "PATCH /admin/api/models/post%20tags/records/a%2Fb",
@@ -76,6 +78,7 @@ describe("requests", () => {
       "GET /admin/api/models/users/lookup?q=an&column=id",
       "GET /admin/api/models/users/lookup?q=",
       "GET /admin/api/models/posts/records?q=x",
+      "GET /admin/api/models/posts/count?q=x",
     ]);
   });
 
@@ -104,7 +107,7 @@ describe("requests", () => {
 
   it("downloads CSV exports", async () => {
     const { calls } = mockFetch({ "GET /admin/api/models/posts/export": { text: "id\n1\n" } });
-    const blob = await api.exportCsv("posts", { page: 3, q: "x" });
+    const blob = await api.exportCsv("posts", { after: "3", q: "x" });
     expect(await blob.text()).toBe("id\n1\n");
     expect(calls[0]!.url).toBe("/admin/api/models/posts/export?q=x");
     expect(calls[0]!.headers.get("Accept")).toBe("text/csv");

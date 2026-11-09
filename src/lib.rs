@@ -22,7 +22,8 @@
 //!
 //! # Features
 //!
-//! - Lists with pagination, sorting, search and filters
+//! - Lists with pagination, sorting, search and filters, which stay fast on
+//!   [large tables](#lists-on-large-tables)
 //! - Create, edit and delete, plus bulk delete and [custom actions](#custom-actions)
 //! - Writes go through `ActiveModel`, so model hooks and validation run as they do in app code
 //! - Foreign keys as links and searchable pickers, with links to related records
@@ -366,6 +367,32 @@
 //!
 //! [`Admin::middlewares_from::<Self>()`](Admin::middlewares_from) uses the app's
 //! `Hooks::middlewares()`; without it, the stack configured under `server.middlewares` is used.
+//!
+//! # Lists on large tables
+//!
+//! A list reads only the rows it shows, wherever they are in the list:
+//!
+//! - **Pages** start from the record before or after them, not from a page number, so the
+//!   database reads them from an index instead of skipping every row before them. Lists have
+//!   Previous and Next buttons rather than page numbers. The default ordering uses the primary
+//!   key's index; to sort a large list by another column, index it, ideally followed by the
+//!   primary key (`CREATE INDEX ... ON articles (published_at, id)`).
+//! - **Counts** stop at 10,000. A larger count shows as "10,000+", or, for a whole table on
+//!   Postgres, as the estimate `ANALYZE` keeps ("~1.2M"). A list counts its records when its
+//!   search or filters change, not on every page.
+//! - **Search** matches text fields that contain the search, ignoring case: `ILIKE` on
+//!   Postgres, `LIKE` on SQLite. Other search fields, such as numbers, dates and UUIDs, match
+//!   when the search is one of their values (`42` finds 42, not 142), so their indexes serve it;
+//!   JSON, binary and array fields match their text.
+//!
+//! On Postgres, a trigram index serves the text search, for example in a migration:
+//!
+//! ```sql
+//! CREATE EXTENSION IF NOT EXISTS pg_trgm;
+//! CREATE INDEX articles_title_trgm ON articles USING gin (title gin_trgm_ops);
+//! ```
+//!
+//! SQLite has no index for text that contains a search, so it reads the whole table.
 //!
 //! # Deploying to production
 //!

@@ -15,10 +15,9 @@ import { queryFromSearch } from "./ModelList";
 function page(records = [postRecord(2), postRecord(1, { featured: true, rating: 4.5 })], extra = {}) {
   return {
     records,
-    total: records.length,
-    page: 1,
     per_page: 25,
-    pages: 1,
+    next: null,
+    prev: null,
     labels: { user_id: { "1": "Ann" } },
     ...extra,
   };
@@ -27,10 +26,12 @@ function page(records = [postRecord(2), postRecord(1, { featured: true, rating: 
 describe("queryFromSearch", () => {
   it("parses list state from the URL", () => {
     expect(
-      queryFromSearch(new URLSearchParams("page=3&sort=title&order=desc&q=x&filter.status=draft")),
-    ).toEqual({ page: 3, sort: "title", order: "desc", q: "x", filters: { status: "draft" } });
-    expect(queryFromSearch(new URLSearchParams("page=abc&order=up"))).toEqual({
-      page: 1,
+      queryFromSearch(new URLSearchParams("after=3&sort=title&order=desc&q=x&filter.status=draft")),
+    ).toEqual({ after: "3", sort: "title", order: "desc", q: "x", filters: { status: "draft" } });
+    expect(queryFromSearch(new URLSearchParams("after=3&before=4")).before).toBeUndefined();
+    expect(queryFromSearch(new URLSearchParams("before=4&order=up"))).toEqual({
+      after: undefined,
+      before: "4",
       sort: undefined,
       order: undefined,
       q: undefined,
@@ -113,7 +114,7 @@ describe("ModelList", () => {
   it("updates the URL when sorting, searching, filtering and paging", async () => {
     const { calls } = mockFetch(
       baseRoutes({
-        "GET /admin/api/models/posts/records": { body: page(undefined, { pages: 3, total: 60 }) },
+        "GET /admin/api/models/posts/records": { body: page(undefined, { next: "1", prev: "2" }) },
         "GET /admin/api/models/users/lookup": { body: { choices: [{ key: "1", value: 1, label: "Ann" }] } },
       }),
     );
@@ -144,7 +145,12 @@ describe("ModelList", () => {
     expect(currentLocation()).toContain("filter.user_id=1");
 
     await user.click(screen.getByRole("button", { name: "Next" }));
-    expect(currentLocation()).toContain("page=2");
+    expect(currentLocation()).toMatch(/^\/models\/posts\?after=1&sort=title/);
+    await user.click(screen.getByRole("button", { name: "Previous" }));
+    expect(currentLocation()).toMatch(/^\/models\/posts\?before=2&sort=title/);
+    await user.type(screen.getByLabelText("Search"), "s{Enter}");
+    expect(currentLocation()).not.toContain("before=");
+    expect(calls.some((c) => c.url.includes("/count?q=rusts&filter."))).toBe(true);
 
     await user.click(screen.getByRole("button", { name: "Clear" }));
     expect(currentLocation()).toBe("/models/posts?sort=title&order=desc");
@@ -233,6 +239,22 @@ describe("ModelList", () => {
     await screen.findByRole("table");
     await user.click(screen.getByRole("button", { name: "Export CSV" }));
     expect(await screen.findByText("no export")).toBeInTheDocument();
+  });
+
+  it("shows counts that stopped at the limit, and pages without numbers", async () => {
+    mockFetch(
+      baseRoutes({
+        "GET /admin/api/models/posts/records": { body: page(undefined, { next: "1" }) },
+        "GET /admin/api/models/posts/count": {
+          body: { count: { kind: "more_than", value: 10000 } },
+        },
+      }),
+    );
+    renderApp("/admin/models/posts");
+    const total = await screen.findByText("10,000+ total");
+    expect(total).toHaveAttribute("title", "Counting stops at 10,000 records");
+    expect(screen.getByRole("button", { name: "Previous" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Next" })).toBeEnabled();
   });
 
   it("handles empty lists, errors and read-only models", async () => {

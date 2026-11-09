@@ -4,6 +4,7 @@ import type {
   AdminRecord,
   AdminUser,
   Choice,
+  Count,
   FormLogin,
   JsonValue,
   Labels,
@@ -90,7 +91,10 @@ const model = (name: string) => `/models/${encodeURIComponent(name)}`;
 const record = (name: string, key: string) => `${model(name)}/records/${encodeURIComponent(key)}`;
 
 export interface ListQuery {
-  page?: number;
+  /** Records after the one with this key. */
+  after?: string;
+  /** Records before the one with this key. */
+  before?: string;
   per_page?: number;
   sort?: string;
   order?: "asc" | "desc";
@@ -100,7 +104,8 @@ export interface ListQuery {
 
 export function listSearch(query: ListQuery): string {
   const params = new URLSearchParams();
-  if (query.page && query.page > 1) params.set("page", String(query.page));
+  if (query.after) params.set("after", query.after);
+  else if (query.before) params.set("before", query.before);
   if (query.per_page) params.set("per_page", String(query.per_page));
   if (query.sort) params.set("sort", query.sort);
   if (query.order) params.set("order", query.order);
@@ -121,8 +126,11 @@ export const api = {
   config: () => json<AdminConfig>("/config"),
   me: () => json<AdminUser>("/me"),
   schema: () => json<{ models: ModelMeta[] }>("/schema"),
-  stats: () => json<{ counts: Record<string, number> }>("/stats"),
+  stats: () => json<{ counts: Record<string, Count> }>("/stats"),
   list: (name: string, query: ListQuery) => json<Page>(`${model(name)}/records${listSearch(query)}`),
+  /** The records matching the list's search and filters. */
+  count: (name: string, query: ListQuery) =>
+    json<{ count: Count }>(`${model(name)}/count${listSearch({ q: query.q, filters: query.filters })}`),
   get: (name: string, key: string) => json<RecordResponse>(record(name, key)),
   create: (name: string, values: Record<string, JsonValue>) =>
     send<RecordResponse>("POST", `${model(name)}/records`, values),
@@ -144,7 +152,8 @@ export const api = {
     return json<{ choices: Choice[] }>(`${model(name)}/lookup?${params.toString()}`);
   },
   exportCsv: async (name: string, query: ListQuery): Promise<Blob> => {
-    const res = await request(`${model(name)}/export${listSearch({ ...query, page: 1 })}`, {
+    const all = { ...query, after: undefined, before: undefined };
+    const res = await request(`${model(name)}/export${listSearch(all)}`, {
       headers: { Accept: "text/csv" },
     });
     return res.blob();

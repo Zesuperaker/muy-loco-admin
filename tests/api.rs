@@ -2,11 +2,13 @@ mod common;
 
 use axum::http::{Method, StatusCode};
 use common::{
-    Client, TestDb, count, create_post, create_user, notes, post_tags, posts, setup, users,
+    Client, TestDb, count, create_post, create_user, exact, insert_posts, is_postgres, notes,
+    post_tags, posts, setup, users,
 };
 use loco_rs::app::AppContext;
 use muy_loco_admin::{Admin, AllowAll, MAX_PER_PAGE, ModelAdmin, SortDirection};
-use sea_orm::{ActiveModelTrait, EntityTrait, IntoActiveModel, Set};
+use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
+use sea_orm::{ActiveModelTrait, ConnectionTrait, EntityTrait, IntoActiveModel, Set};
 use serde_json::{Value, json};
 
 fn admin() -> Admin {
@@ -397,27 +399,68 @@ async fn list_paginates_sorts_and_labels() {
         create_post(&db.db, ann.id, &format!("Post {i}")).await;
     }
 
-    let res = client
-        .get("/api/models/posts/records?per_page=3&page=2")
-        .await;
-    assert_eq!(res.status, 200);
-    let body = res.json();
-    assert_eq!(body["total"], 7);
-    assert_eq!(body["pages"], 3);
-    assert_eq!(body["page"], 2);
-    assert_eq!(body["per_page"], 3);
-    let titles: Vec<&str> = body["records"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|r| r["values"]["title"].as_str().unwrap())
-        .collect();
+    let titles = |body: &Value| -> Vec<String> {
+        body["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["values"]["title"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let first = client.get("/api/models/posts/records?per_page=3").await;
+    assert_eq!(first.status, 200);
+    let first = first.json();
     assert_eq!(
-        titles,
-        vec!["Post 4", "Post 3", "Post 2"],
+        titles(&first),
+        ["Post 7", "Post 6", "Post 5"],
         "default order is id desc"
     );
+    assert_eq!(first["per_page"], 3);
+    assert_eq!(first["prev"], Value::Null);
+    assert_eq!(first["next"], first["records"][2]["key"]);
+
+    let next = first["next"].as_str().unwrap();
+    let body = client
+        .get(&format!(
+            "/api/models/posts/records?per_page=3&after={next}"
+        ))
+        .await
+        .json();
+    assert_eq!(titles(&body), ["Post 4", "Post 3", "Post 2"]);
+    assert_eq!(body["prev"], body["records"][0]["key"]);
+    assert_eq!(body["next"], body["records"][2]["key"]);
     assert_eq!(body["labels"]["user_id"][ann.id.to_string()], "ann");
+    let prev = body["prev"].as_str().unwrap();
+    let back = client
+        .get(&format!(
+            "/api/models/posts/records?per_page=3&before={prev}"
+        ))
+        .await
+        .json();
+    assert_eq!(back["records"], first["records"]);
+    assert_eq!(back["prev"], Value::Null, "the first page has no previous");
+
+    let next = body["next"].as_str().unwrap();
+    let last = client
+        .get(&format!(
+            "/api/models/posts/records?per_page=3&after={next}"
+        ))
+        .await
+        .json();
+    assert_eq!(titles(&last), ["Post 1"]);
+    assert_eq!(last["next"], Value::Null);
+    let prev = last["prev"].as_str().unwrap();
+    let back = client
+        .get(&format!(
+            "/api/models/posts/records?per_page=3&before={prev}"
+        ))
+        .await
+        .json();
+    assert_eq!(back["records"], body["records"]);
+    assert_eq!(
+        client.get("/api/models/posts/count").await.json(),
+        json!({"count": exact(7)})
+    );
 
     let body = client
         .get("/api/models/posts/records?sort=title&order=asc&per_page=2")
@@ -440,7 +483,9 @@ async fn list_paginates_sorts_and_labels() {
 
     let res = client.get("/api/models/posts/records?sort=password").await;
     assert_eq!(res.status, 400);
-    let res = client.get("/api/models/posts/records?page=abc").await;
+    let res = client
+        .get("/api/models/posts/records?after=1&before=2")
+        .await;
     assert_eq!(res.status, 400);
     let res = client.get("/api/models/nothing/records").await;
     assert_eq!(res.status, 404);
@@ -538,7 +583,20 @@ async fn list_search_and_filters() {
         .get("/api/models/users/records?q=hashed")
         .await
         .json();
-    assert_eq!(body["total"], 0);
+    assert_eq!(body["records"], json!([]));
+    let body = client.get("/api/models/users/count?q=hashed").await.json();
+    assert_eq!(body["count"], exact(0));
+    let body = client.get("/api/models/posts/count?q=rust").await.json();
+    assert_eq!(body["count"], exact(1), "counts follow the search");
+    let body = client
+        .get("/api/models/posts/count?filter.rating=__null__")
+        .await
+        .json();
+    assert_eq!(body["count"], exact(2), "and the filters");
+    let res = client
+        .get("/api/models/posts/count?filter.views=lots")
+        .await;
+    assert_eq!(res.status, 422);
 }
 
 #[tokio::test]
@@ -921,7 +979,7 @@ async fn stats_count_records() {
     let body = client.get("/api/stats").await.json();
     assert_eq!(
         body["counts"],
-        json!({"users": 1, "posts": 1, "post_tags": 0, "notes": 0})
+        json!({"users": exact(1), "posts": exact(1), "post_tags": exact(0), "notes": exact(0)})
     );
 }
 
@@ -1089,7 +1147,11 @@ async fn custom_configuration_is_applied() {
         .get(&format!("/api/models/people/records?q={}", ann.id))
         .await
         .json();
-    assert_eq!(body["total"], 1, "non-text search fields are cast to text");
+    assert_eq!(
+        body["records"].as_array().unwrap().len(),
+        1,
+        "non-text search fields match their value"
+    );
     assert_eq!(body["records"][0]["label"], "ann@example.com");
     let res = client
         .patch(
@@ -1136,7 +1198,7 @@ async fn integers_beyond_javascript_precision_are_strings() {
         .get("/api/models/posts/records?filter.views=9007199254740995")
         .await
         .json();
-    assert_eq!(list["total"], 1);
+    assert_eq!(list["records"].as_array().unwrap().len(), 1);
     assert_eq!(
         list["records"][0]["values"]["user_id"], user.id,
         "small stay numbers"
@@ -1223,18 +1285,10 @@ async fn lookup_finds_records_by_key() {
 }
 
 #[tokio::test]
-async fn out_of_range_pages_and_json_filters_are_bad_requests() {
+async fn json_filters_are_bad_requests() {
     let (db, _ctx, client) = client().await;
     let user = create_user(&db.db, "ann@example.com", true).await;
     create_post(&db.db, user.id, "p").await;
-    for uri in [
-        "/api/models/posts/records?page=999999999999999999",
-        "/api/models/posts/records?page=36893488147419103&per_page=500",
-    ] {
-        let res = client.get(uri).await;
-        assert_eq!(res.status, 400, "{uri}: {}", res.text());
-        assert_eq!(res.json()["error"], "`page` is too large");
-    }
     let res = client
         .get("/api/models/posts/records?filter.meta=%7B%7D")
         .await;
@@ -1268,4 +1322,320 @@ async fn values_the_database_rejects_are_validation_errors() {
             assert_eq!(res.status, StatusCode::CREATED, "{name}: {}", res.text());
         }
     }
+}
+
+/// Read `list` a page at a time, forward and then backward, and check both
+/// walks see every record once, in the order of the list read in one page.
+async fn assert_pages_walk(client: &Client, list: &str, per_page: u64) {
+    let keys = |body: &Value| -> Vec<String> {
+        body["records"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{list}: {body}"))
+            .iter()
+            .map(|r| r["key"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let get = |cursor: String| {
+        let uri = format!("{list}&per_page={per_page}{cursor}");
+        let client = client.clone();
+        async move { client.get(&uri).await.json() }
+    };
+    let cursor =
+        |name: &str, key: &str| format!("&{name}={}", utf8_percent_encode(key, NON_ALPHANUMERIC));
+    let all = keys(&client.get(&format!("{list}&per_page=500")).await.json());
+    assert!(all.len() as u64 > per_page, "{list}: too few records");
+
+    let mut page = get(String::new()).await;
+    assert_eq!(page["prev"], Value::Null, "{list}: first page");
+    let mut forward = Vec::new();
+    while let Some(next) = page["next"].as_str() {
+        assert_eq!(keys(&page).len() as u64, per_page, "{list}: a full page");
+        forward.extend(keys(&page));
+        page = get(cursor("after", next)).await;
+        assert!(page["prev"].is_string(), "{list}: a later page");
+    }
+    forward.extend(keys(&page));
+    assert_eq!(forward, all, "{list} forward by {per_page}");
+
+    let mut backward = keys(&page);
+    while let Some(prev) = page["prev"].as_str() {
+        page = get(cursor("before", prev)).await;
+        assert!(page["next"].is_string(), "{list}: an earlier page");
+        backward.splice(0..0, keys(&page));
+    }
+    assert_eq!(backward, all, "{list} backward by {per_page}");
+}
+
+#[tokio::test]
+async fn pages_walk_every_record_once_in_any_order() {
+    use sea_orm::prelude::{ChronoDate, ChronoTime, Uuid};
+    let (db, _ctx, client) = client().await;
+    let ann = create_user(&db.db, "ann@example.com", true).await;
+    let date = |d| ChronoDate::from_ymd_opt(2024, 1, d);
+    // Ties and NULLs in every column, so the key has to break them.
+    let rows = [
+        ("b", None, 1, false, None, None),
+        ("a", Some(2.0), 1, true, date(2), Some(json!({"k": 1}))),
+        ("b", Some(2.0), 2, false, None, Some(json!({"k": 1}))),
+        ("c", None, 2, true, date(1), None),
+        ("a", Some(1.0), 3, false, date(1), Some(json!({"a": 2}))),
+        ("b", None, 3, true, None, Some(json!({"k": 0}))),
+        ("d", Some(3.0), 1, false, date(3), None),
+        ("a", Some(2.0), 2, false, None, Some(json!({"k": 1}))),
+        ("c", Some(1.0), 3, true, date(2), Some(json!({"z": [1]}))),
+    ];
+    for (i, (title, rating, views, published, day, meta)) in rows.into_iter().enumerate() {
+        let mut am = create_post(&db.db, ann.id, title).await.into_active_model();
+        am.rating = Set(rating);
+        am.views = Set(views);
+        am.featured = Set(i % 3 == 0);
+        if published {
+            am.status = Set(posts::PostStatus::Published);
+        }
+        am.published_on = Set(day);
+        am.meta = Set(meta);
+        am.update(&db.db).await.unwrap();
+        for tag in ["x", "y"] {
+            post_tags::ActiveModel {
+                post_id: Set(i32::try_from(i + 1).unwrap()),
+                tag: Set(tag.to_string()),
+                weight: Set(i16::try_from(i % 2).unwrap()),
+            }
+            .insert(&db.db)
+            .await
+            .unwrap();
+        }
+        notes::ActiveModel {
+            id: Set(Uuid::from_u128(u128::try_from(i).unwrap() * 7919 % 13)),
+            content: Set(title.to_string()),
+            reminder_at: Set(day.and_then(|d| d.and_hms_opt(9, 0, 0))),
+            remind_time: Set(rating.map(|_| ChronoTime::from_hms_opt(8, 0, 0).unwrap())),
+            pinned: Set(published.then_some(i % 2 == 0)),
+            ..Default::default()
+        }
+        .insert(&db.db)
+        .await
+        .unwrap();
+    }
+
+    let mut lists = vec!["/api/models/posts/records?".to_string()];
+    for field in [
+        "id",
+        "title",
+        "rating",
+        "views",
+        "featured",
+        "status",
+        "published_on",
+        "meta",
+        "price",
+        "created_at",
+    ] {
+        for order in ["asc", "desc"] {
+            lists.push(format!(
+                "/api/models/posts/records?sort={field}&order={order}"
+            ));
+        }
+    }
+    for order in ["asc", "desc"] {
+        for field in ["weight", "tag", "post_id"] {
+            lists.push(format!(
+                "/api/models/post_tags/records?sort={field}&order={order}"
+            ));
+        }
+        for field in ["content", "reminder_at", "remind_time", "pinned"] {
+            lists.push(format!(
+                "/api/models/notes/records?sort={field}&order={order}"
+            ));
+        }
+    }
+    lists.push("/api/models/posts/records?filter.featured=false&q=O&sort=rating".into());
+    for list in &lists {
+        for per_page in [2, 4] {
+            assert_pages_walk(&client, list, per_page).await;
+        }
+    }
+
+    // NULLs sort where the database puts them, so its indexes serve the list.
+    let body = client
+        .get("/api/models/posts/records?sort=rating&order=asc&per_page=1")
+        .await
+        .json();
+    let first = &body["records"][0]["values"]["rating"];
+    if is_postgres() {
+        assert_eq!(*first, json!(1.0), "Postgres sorts NULLs last");
+    } else {
+        assert_eq!(*first, Value::Null, "SQLite sorts NULLs first");
+    }
+}
+
+#[tokio::test]
+async fn cursors_whose_records_are_gone_still_find_a_page() {
+    let (db, _ctx, client) = client().await;
+    let ann = create_user(&db.db, "ann@example.com", true).await;
+    let mut ids = Vec::new();
+    for i in 1..=5 {
+        ids.push(create_post(&db.db, ann.id, &format!("Post {i}")).await.id);
+    }
+    let page = |cursor: String| {
+        let client = client.clone();
+        async move {
+            let body = client
+                .get(&format!("/api/models/posts/records?per_page=2&{cursor}"))
+                .await
+                .json();
+            let ids: Vec<i64> = body["records"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|r| r["values"]["id"].as_i64().unwrap())
+                .collect();
+            (ids, body["prev"].clone(), body["next"].clone())
+        }
+    };
+    let id = |n: usize| i64::from(ids[n - 1]);
+
+    let first = (vec![id(5), id(4)], Value::Null, json!(id(4).to_string()));
+    assert_eq!(page("after=999999".into()).await, first, "no such record");
+    assert_eq!(page("after=abc".into()).await, first, "not a key");
+    assert_eq!(page(format!("before={}", id(5))).await, first);
+    assert_eq!(
+        page(format!("before={}", id(4))).await,
+        first,
+        "a short first page is filled"
+    );
+
+    // Deleting every record on the last page leaves the one before it.
+    let res = client
+        .delete(&format!("/api/models/posts/records/{}", id(1)))
+        .await;
+    assert_eq!(res.status, 200);
+    assert_eq!(
+        page(format!("after={}", id(2))).await,
+        (vec![id(3), id(2)], json!(id(3).to_string()), Value::Null)
+    );
+    // ... or the first page, when that is all there is.
+    for n in [2, 3] {
+        client
+            .delete(&format!("/api/models/posts/records/{}", id(n)))
+            .await;
+    }
+    assert_eq!(
+        page(format!("after={}", id(4))).await,
+        (vec![id(5), id(4)], Value::Null, Value::Null)
+    );
+}
+
+#[tokio::test]
+async fn counts_stop_at_the_limit() {
+    let (db, _ctx, client) = client().await;
+    let ann = create_user(&db.db, "ann@example.com", true).await;
+    if is_postgres() {
+        // Postgres's estimate stays unknown until the test analyzes the table.
+        db.db
+            .execute_unprepared("ALTER TABLE posts SET (autovacuum_enabled = false)")
+            .await
+            .unwrap();
+    }
+    insert_posts(&db.db, ann.id, 10_050).await;
+    let count = |query: &'static str| {
+        let client = client.clone();
+        async move {
+            client
+                .get(&format!("/api/models/posts/count{query}"))
+                .await
+                .json()["count"]
+                .clone()
+        }
+    };
+    let more = json!({"kind": "more_than", "value": 10_000});
+    assert_eq!(count("").await, more);
+    assert_eq!(count("?q=bulk").await, more);
+    assert_eq!(
+        count("?filter.featured=true").await,
+        exact(5_025),
+        "counts below the limit are exact"
+    );
+    let stats = client.get("/api/stats").await.json();
+    assert_eq!(stats["counts"]["posts"], more);
+    assert_eq!(stats["counts"]["users"], exact(1));
+
+    if is_postgres() {
+        db.db.execute_unprepared("ANALYZE posts").await.unwrap();
+        let estimate = json!({"kind": "estimate", "value": 10_050});
+        assert_eq!(count("").await, estimate);
+        let stats = client.get("/api/stats").await.json();
+        assert_eq!(stats["counts"]["posts"], estimate);
+        assert_eq!(count("?q=bulk").await, more, "no estimate for a search");
+    }
+}
+
+#[tokio::test]
+async fn search_matches_other_fields_by_value() {
+    let (db, ctx) = setup().await;
+    let router = Admin::new(AllowAll)
+        .register(ModelAdmin::<posts::Entity>::new().search_fields(["title", "views", "meta"]))
+        .register(
+            ModelAdmin::<posts::Entity>::new()
+                .name("by_views")
+                .search_fields(["views"]),
+        )
+        .register(ModelAdmin::<users::Entity>::new().search_fields(Vec::<String>::new()))
+        .router(&ctx)
+        .await
+        .unwrap();
+    let client = Client::new(router);
+    let ann = create_user(&db.db, "ann@example.com", true).await;
+    for (title, views, meta) in [
+        ("Alpha", 5, None),
+        ("Beta", 15, Some(json!({"tag": "rust"}))),
+        ("Gamma 5", 50, None),
+    ] {
+        let mut am = create_post(&db.db, ann.id, title).await.into_active_model();
+        am.views = Set(views);
+        am.meta = Set(meta);
+        am.update(&db.db).await.unwrap();
+    }
+    let titles = |model: &'static str, q: &'static str| {
+        let client = client.clone();
+        async move {
+            let body = client
+                .get(&format!("/api/models/{model}/records?sort=title&q={q}"))
+                .await
+                .json();
+            body["records"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|r| r["values"]["title"].as_str().unwrap().to_string())
+                .collect::<Vec<_>>()
+        }
+    };
+    assert_eq!(
+        titles("posts", "5").await,
+        ["Alpha", "Gamma 5"],
+        "numbers match whole values"
+    );
+    assert_eq!(titles("posts", "RUST").await, ["Beta"], "JSON by its text");
+    assert_eq!(titles("by_views", "15").await, ["Beta"]);
+    assert!(
+        titles("by_views", "lots").await.is_empty(),
+        "not a value of any search field"
+    );
+    let body = client.get("/api/models/by_views/count?q=lots").await.json();
+    assert_eq!(body["count"], exact(0));
+
+    // Pickers find records by a text value's start, or a number's value.
+    let body = client
+        .get("/api/models/users/lookup?column=email&q=ANN")
+        .await
+        .json();
+    assert_eq!(body["choices"][0]["value"], "ann@example.com");
+    let body = client.get("/api/models/users/lookup?q=x").await.json();
+    assert_eq!(body["choices"], json!([]));
+    let body = client
+        .get(&format!("/api/models/users/lookup?q={}", ann.id))
+        .await
+        .json();
+    assert_eq!(body["choices"][0]["value"], ann.id);
 }

@@ -16,11 +16,21 @@ pub const NULL_FILTER: &str = "__null__";
 pub const NOT_NULL_FILTER: &str = "__notnull__";
 
 const FILTER_PREFIX: &str = "filter.";
+const BOTH_CURSORS: &str = "use `after` or `before`, not both";
 
-/// Parsed `?page=&per_page=&sort=&order=&q=&filter.<field>=` parameters.
+/// Where a list page starts, by the key of a record on the neighboring page.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Cursor {
+    /// The records after this one.
+    After(String),
+    /// The records before this one.
+    Before(String),
+}
+
+/// Parsed `?after=&before=&per_page=&sort=&order=&q=&filter.<field>=` parameters.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct ListParams {
-    pub page: u64,
+    pub cursor: Option<Cursor>,
     pub per_page: Option<u64>,
     pub sort: Option<String>,
     pub order: Option<SortDirection>,
@@ -36,13 +46,21 @@ fn parse_u64(name: &str, raw: &str) -> AdminResult<u64> {
 
 impl ListParams {
     pub(crate) fn from_query(query: &HashMap<String, String>) -> AdminResult<Self> {
-        let mut params = Self {
-            page: 1,
-            ..Self::default()
-        };
+        let mut params = Self::default();
         for (key, raw) in query {
             match key.as_str() {
-                "page" => params.page = parse_u64("page", raw)?.max(1),
+                "after" if !raw.is_empty() => {
+                    if params.cursor.is_some() {
+                        return Err(AdminError::bad_request(BOTH_CURSORS));
+                    }
+                    params.cursor = Some(Cursor::After(raw.clone()));
+                }
+                "before" if !raw.is_empty() => {
+                    if params.cursor.is_some() {
+                        return Err(AdminError::bad_request(BOTH_CURSORS));
+                    }
+                    params.cursor = Some(Cursor::Before(raw.clone()));
+                }
                 "per_page" => {
                     params.per_page = Some(parse_u64("per_page", raw)?.clamp(1, MAX_PER_PAGE));
                 }
@@ -89,18 +107,15 @@ mod tests {
     #[test]
     fn defaults() {
         let p = ListParams::from_query(&HashMap::new()).unwrap();
-        assert_eq!(p.page, 1);
+        assert_eq!(p, ListParams::default());
+        assert_eq!(p.cursor, None);
         assert_eq!(p.per_page, None);
-        assert_eq!(
-            p.filters,
-            [] as [(std::string::String, std::string::String); 0]
-        );
     }
 
     #[test]
     fn parses_everything() {
         let p = ListParams::from_query(&q(&[
-            ("page", "3"),
+            ("after", "3"),
             ("per_page", "10000"),
             ("sort", "title"),
             ("order", "ASC"),
@@ -108,10 +123,11 @@ mod tests {
             ("filter.published", "true"),
             ("filter.user_id", "4"),
             ("filter.empty", ""),
+            ("page", "2"),
             ("unrelated", "x"),
         ]))
         .unwrap();
-        assert_eq!(p.page, 3);
+        assert_eq!(p.cursor, Some(Cursor::After("3".to_string())));
         assert_eq!(p.per_page, Some(MAX_PER_PAGE));
         assert_eq!(p.sort.as_deref(), Some("title"));
         assert_eq!(p.order, Some(SortDirection::Asc));
@@ -123,18 +139,13 @@ mod tests {
                 ("user_id".to_string(), "4".to_string())
             ]
         );
+        let p = ListParams::from_query(&q(&[("before", "a,b"), ("after", "")])).unwrap();
+        assert_eq!(p.cursor, Some(Cursor::Before("a,b".to_string())));
     }
 
     #[test]
     fn edge_values() {
-        let p = ListParams::from_query(&q(&[
-            ("page", "0"),
-            ("q", "  "),
-            ("order", ""),
-            ("sort", ""),
-        ]))
-        .unwrap();
-        assert_eq!(p.page, 1);
+        let p = ListParams::from_query(&q(&[("q", "  "), ("order", ""), ("sort", "")])).unwrap();
         assert_eq!(p.q, None);
         assert_eq!(p.order, None);
         assert_eq!(p.sort, None);
@@ -145,8 +156,9 @@ mod tests {
 
     #[test]
     fn rejects_bad_values() {
-        assert!(ListParams::from_query(&q(&[("page", "x")])).is_err());
         assert!(ListParams::from_query(&q(&[("per_page", "-1")])).is_err());
         assert!(ListParams::from_query(&q(&[("order", "sideways")])).is_err());
+        let err = ListParams::from_query(&q(&[("after", "1"), ("before", "2")])).unwrap_err();
+        assert!(err.to_string().contains("not both"), "{err}");
     }
 }

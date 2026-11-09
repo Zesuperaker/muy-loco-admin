@@ -12,13 +12,13 @@ use futures_util::stream::{self, BoxStream, StreamExt};
 use loco_rs::app::AppContext;
 use sea_orm::{
     AccessMode, ActiveModelBehavior, ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait,
-    DatabaseConnection, DatabaseTransaction, DbBackend, DbErr, EntityTrait, IdenStatic, Identity,
-    IntoActiveModel, IsolationLevel, Iterable, ModelTrait, Order, PaginatorTrait,
-    PrimaryKeyToColumn, PrimaryKeyTrait, QueryFilter, QueryOrder, QuerySelect, RelationTrait,
-    Select, TransactionTrait, Value,
+    DatabaseConnection, DatabaseTransaction, DbBackend, DbErr, EntityName, EntityTrait, IdenStatic,
+    Identity, IntoActiveModel, IsolationLevel, Iterable, ModelTrait, Order, PrimaryKeyToColumn,
+    PrimaryKeyTrait, QueryFilter, QueryOrder, QuerySelect, QueryTrait, RelationTrait, Select,
+    Statement, TransactionTrait, Value,
     sea_query::{
-        Alias, ColumnType, Expr, ExprTrait, Func, IntoIden, LikeExpr, TableName, TableRef,
-        ValueTuple,
+        Alias, Asterisk, ColumnType, Expr, ExprTrait, Func, IntoIden, LikeExpr, Query, TableName,
+        TableRef, ValueTuple,
     },
 };
 use serde::Serialize;
@@ -31,12 +31,14 @@ use crate::{
         SortDirection, enum_choices, humanize, max_length,
     },
     model::{Action, ModelAdmin},
-    query::{ListParams, NOT_NULL_FILTER, NULL_FILTER},
+    query::{Cursor, ListParams, NOT_NULL_FILTER, NULL_FILTER},
     value::{convert, decode_key, encode_key, is_null, json_to_text, to_json, to_text},
 };
 
 const DEFAULT_PER_PAGE: u64 = 25;
 const EXPORT_BATCH: u64 = 500;
+/// Counting stops after this many records, so a count never reads more.
+pub(crate) const COUNT_LIMIT: u64 = 10_000;
 const SENSITIVE: &[&str] = &["password", "secret", "token", "api_key", "salt"];
 /// Loco's timestamp columns: read-only by default and listed after the other fields.
 const TIMESTAMPS: &[&str] = &["created_at", "updated_at"];
@@ -55,15 +57,29 @@ pub struct Record {
     pub values: Map<String, Json>,
 }
 
-/// One page of a list.
+/// One page of a list. Pages are found from their neighbors' records, not by
+/// number, so a page reads only its own rows wherever it is in the list.
 #[derive(Debug, Clone, Serialize)]
 #[allow(clippy::struct_field_names)]
 pub struct Page {
     pub records: Vec<Record>,
-    pub total: u64,
-    pub page: u64,
     pub per_page: u64,
-    pub pages: u64,
+    /// The `after` cursor of the next page, if there is one.
+    pub next: Option<String>,
+    /// The `before` cursor of the previous page, if there is one.
+    pub prev: Option<String>,
+}
+
+/// How many records a list has.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+pub enum Count {
+    /// Exactly this many.
+    Exact(u64),
+    /// More than this many: counting stopped at [`COUNT_LIMIT`].
+    MoreThan(u64),
+    /// About this many, from Postgres's table statistics.
+    Estimate(u64),
 }
 
 /// An option offered by a foreign-key picker.
@@ -81,7 +97,8 @@ pub(crate) type CsvStream = BoxStream<'static, AdminResult<Bytes>>;
 #[async_trait]
 pub(crate) trait Resource: Send + Sync {
     fn meta(&self) -> &ModelMeta;
-    async fn count(&self, db: &DatabaseConnection) -> AdminResult<u64>;
+    /// The records matching `params`' search and filters.
+    async fn count(&self, db: &DatabaseConnection, params: &ListParams) -> AdminResult<Count>;
     async fn list(&self, db: &DatabaseConnection, params: &ListParams) -> AdminResult<Page>;
     async fn get(&self, db: &DatabaseConnection, key: &str) -> AdminResult<Record>;
     /// Insert a record from `input`. Fields in `locked` are read-only, like
@@ -169,11 +186,17 @@ pub(crate) fn is_sensitive(name: &str) -> bool {
     SENSITIVE.iter().any(|s| lower.contains(s))
 }
 
-/// Spellings of `q` to look for in `lower(column)`. SQLite's `lower()`, and
-/// Postgres's under the `C` locale, only lowercase ASCII, so non-ASCII
-/// letters keep their stored case: `q` is tried as typed and in lower, upper
-/// and title case, with ASCII lowercased like `lower()` does.
+/// Spellings of `q` to look for. Searches ignore the case of ASCII letters,
+/// but SQLite's `LIKE`, and Postgres's `ILIKE` under the `C` locale, match
+/// other letters only in the case they are typed in: a `q` with such letters
+/// is also tried in lower, upper and title case.
 fn search_terms(q: &str) -> Vec<String> {
+    if !q
+        .chars()
+        .any(|c| !c.is_ascii() && (c.is_lowercase() || c.is_uppercase()))
+    {
+        return vec![q.to_string()];
+    }
     let mut word_start = true;
     let title: String = q
         .chars()
@@ -196,13 +219,44 @@ fn search_terms(q: &str) -> Vec<String> {
     terms
 }
 
-/// `lower(column)` as text, for case-insensitive `LIKE`.
-fn lowered<E: EntityTrait>(column: &Column<E>) -> Expr {
-    let mut expr = Expr::col((E::default(), column.col));
-    if !column.kind.is_textual() {
-        expr = expr.cast_as(Alias::new("text"));
+/// `expr` matching the `LIKE` `pattern`, whose wildcards [`escape_like`]
+/// escapes, ignoring the case of ASCII letters at least: `ILIKE` on Postgres,
+/// which a trigram index on the column serves, and `LIKE` on SQLite, which
+/// ignores ASCII case itself.
+fn like(backend: DbBackend, expr: Expr, pattern: String) -> Expr {
+    use sea_orm::sea_query::extension::postgres::PgExpr;
+    if backend == DbBackend::Postgres {
+        // Backslash is Postgres's default escape character, and sea-query
+        // writes `ILIKE` with an `ESCAPE` clause in invalid brackets.
+        expr.ilike(LikeExpr::new(pattern))
+    } else {
+        expr.like(LikeExpr::new(pattern).escape('\\'))
     }
-    Expr::expr(Func::lower(expr))
+}
+
+/// Postgres's estimate of the rows in `entity`'s table, from the statistics
+/// `ANALYZE` and autovacuum keep, scaled to the table's current size as the
+/// query planner does. `None` before the table is first analyzed.
+async fn estimate(db: &DatabaseConnection, entity: &impl EntityName) -> Result<Option<u64>, DbErr> {
+    let quote = |name: &str| format!("\"{}\"", name.replace('"', "\"\""));
+    let table = match entity.schema_name() {
+        Some(schema) => format!("{}.{}", quote(schema), quote(entity.table_name())),
+        None => quote(entity.table_name()),
+    };
+    let sql = "SELECT (reltuples::float8 / relpages \
+               * (pg_relation_size(oid) / current_setting('block_size')::float8))::bigint \
+               FROM pg_class WHERE oid = to_regclass($1) AND reltuples >= 0 AND relpages > 0";
+    let row = db
+        .query_one_raw(Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            sql,
+            [table.into()],
+        ))
+        .await?;
+    Ok(row
+        .map(|row| row.try_get_by_index::<i64>(0))
+        .transpose()?
+        .and_then(|n| u64::try_from(n).ok()))
 }
 
 fn escape_like(input: &str) -> String {
@@ -278,6 +332,65 @@ fn normalize(kind: FieldKind, input: Json) -> Json {
         Json::String(s) if s.trim().is_empty() && !kind.is_textual() => Json::Null,
         _ => input,
     }
+}
+
+/// A list's order: a column, then the rest of the primary key to break ties.
+struct Sort<E: EntityTrait> {
+    col: E::Column,
+    /// Postgres's `json` type has no ordering, so JSON sorts by its text.
+    json: bool,
+    nullable: bool,
+    asc: bool,
+}
+
+impl<E: EntityTrait> Sort<E> {
+    /// What the list is ordered by.
+    fn expr(&self) -> Expr {
+        let expr = Expr::col((E::default(), self.col));
+        if self.json {
+            expr.cast_as(Alias::new("text"))
+        } else {
+            expr
+        }
+    }
+
+    fn order(&self) -> Order {
+        if self.asc { Order::Asc } else { Order::Desc }
+    }
+
+    /// The same order, backwards.
+    fn reversed(&self) -> Self {
+        Self {
+            col: self.col,
+            json: self.json,
+            nullable: self.nullable,
+            asc: !self.asc,
+        }
+    }
+
+    /// Whether `NULL`s come first. Postgres sorts them as larger than any
+    /// value and SQLite as smaller; lists keep that order, so the database
+    /// can read them from an index.
+    fn nulls_first(&self, backend: DbBackend) -> bool {
+        (backend == DbBackend::Postgres) != self.asc
+    }
+
+    /// `a` comes after `b` in this order, or level with it if `inclusive`.
+    fn later(&self, a: Expr, b: Expr, inclusive: bool) -> Expr {
+        match (self.asc, inclusive) {
+            (true, false) => a.gt(b),
+            (true, true) => a.gte(b),
+            (false, false) => a.lt(b),
+            (false, true) => a.lte(b),
+        }
+    }
+}
+
+/// Where a record is in a list: its sort value, and its values of the key
+/// columns that break ties.
+struct Anchor {
+    sort: Value,
+    keys: Vec<Value>,
 }
 
 impl<E> ModelResource<E>
@@ -605,12 +718,18 @@ where
             .ok_or(AdminError::NotFound)
     }
 
-    fn query(&self, params: &ListParams) -> AdminResult<Select<E>> {
+    /// Whether `params` narrows the list down.
+    fn filtered(&self, params: &ListParams) -> bool {
+        !params.filters.is_empty() || (params.q.is_some() && !self.search.is_empty())
+    }
+
+    /// The records matching `params`' search and filters, in no order.
+    fn query(&self, backend: DbBackend, params: &ListParams) -> AdminResult<Select<E>> {
         let mut cond = Condition::all();
         if let Some(q) = &params.q
             && !self.search.is_empty()
         {
-            cond = cond.add(self.search_condition(q));
+            cond = cond.add(self.search_condition(backend, q));
         }
         let mut errors = FieldErrors::new();
         for (field, raw) in &params.filters {
@@ -641,49 +760,234 @@ where
         Ok(E::find().filter(cond))
     }
 
-    /// Records whose search fields contain `q`, ignoring case.
-    fn search_condition(&self, q: &str) -> Condition {
+    /// Records whose search fields match `q`. Text fields contain it, ignoring
+    /// case. JSON, binary, array and other fields contain it in their text,
+    /// which no index serves. The rest, such as numbers, dates and UUIDs, equal
+    /// it when it is one of their values, so their indexes serve the search.
+    fn search_condition(&self, backend: DbBackend, q: &str) -> Condition {
+        let terms = search_terms(q);
         let mut any = Condition::any();
-        for term in search_terms(q) {
-            let pattern = format!("%{}%", escape_like(&term));
-            for idx in &self.search {
-                any = any.add(
-                    lowered(&self.columns[*idx]).like(LikeExpr::new(pattern.clone()).escape('\\')),
-                );
+        for column in self.search.iter().map(|i| &self.columns[*i]) {
+            let expr = Expr::col((E::default(), column.col));
+            let text = match column.kind {
+                FieldKind::String | FieldKind::Text => expr,
+                FieldKind::Json | FieldKind::Binary | FieldKind::Array | FieldKind::Other => {
+                    expr.cast_as(Alias::new("text"))
+                }
+                _ => {
+                    any = any.add_option(Self::exact(column, q).map(|v| column.col.eq(v)));
+                    continue;
+                }
+            };
+            for term in &terms {
+                any = any.add(like(
+                    backend,
+                    text.clone(),
+                    format!("%{}%", escape_like(term)),
+                ));
             }
         }
         any
     }
 
-    fn ordered(&self, params: &ListParams) -> AdminResult<Select<E>> {
+    /// `q` as a value of `column`, if it is one.
+    fn exact(column: &Column<E>, q: &str) -> Option<Value> {
+        Self::convert(column, Json::String(q.to_string()))
+            .ok()
+            .filter(|value| !is_null(value))
+    }
+
+    fn sort(&self, params: &ListParams) -> AdminResult<Sort<E>> {
         let (col, default_dir) = match &params.sort {
             Some(field) => (self.column(field)?.col, SortDirection::Asc),
             None => self.order,
         };
-        let json = self
-            .columns
+        Ok(Sort {
+            col,
+            json: self
+                .columns
+                .iter()
+                .any(|c| c.col.as_str() == col.as_str() && c.kind == FieldKind::Json),
+            nullable: col.def().is_null(),
+            asc: params.order.unwrap_or(default_dir) == SortDirection::Asc,
+        })
+    }
+
+    /// The key columns that break ties in `sort` order.
+    fn tiebreak<'a>(&'a self, sort: &'a Sort<E>) -> impl Iterator<Item = E::Column> + 'a {
+        self.pk
             .iter()
-            .any(|c| c.col.as_str() == col.as_str() && c.kind == FieldKind::Json);
-        let order = match params.order.unwrap_or(default_dir) {
-            SortDirection::Asc => Order::Asc,
-            SortDirection::Desc => Order::Desc,
+            .copied()
+            .filter(|pk| pk.as_str() != sort.col.as_str())
+    }
+
+    fn ordered(&self, select: Select<E>, sort: &Sort<E>) -> Select<E> {
+        let mut select = select.order_by(sort.expr(), sort.order());
+        for pk in self.tiebreak(sort) {
+            select = select.order_by(pk, sort.order());
+        }
+        select
+    }
+
+    /// Where the record with `key` is in `sort` order, or `None` if there is
+    /// no such record.
+    async fn anchor(
+        &self,
+        db: &DatabaseConnection,
+        sort: &Sort<E>,
+        key: &str,
+    ) -> AdminResult<Option<Anchor>> {
+        let Ok(cond) = self.key_condition(key) else {
+            return Ok(None);
         };
-        let query = self.query(params)?;
-        // Postgres's `json` type has no ordering; its text form does.
-        let mut query = if json {
-            query.order_by(
-                Expr::col((E::default(), col)).cast_as(Alias::new("text")),
-                order.clone(),
-            )
+        let Some(model) = E::find().filter(cond.clone()).one(db).await? else {
+            return Ok(None);
+        };
+        let sort_value = if sort.json {
+            // The text the list sorts by, which may differ from `to_json`'s.
+            let text: Option<Option<String>> = E::find()
+                .select_only()
+                .expr(sort.expr())
+                .filter(cond)
+                .into_tuple()
+                .one(db)
+                .await?;
+            Value::String(text.flatten())
         } else {
-            query.order_by(col, order.clone())
+            model.get(sort.col)
         };
-        for pk in &self.pk {
-            if pk.as_str() != col.as_str() {
-                query = query.order_by(*pk, order.clone());
+        Ok(Some(Anchor {
+            sort: sort_value,
+            keys: self.tiebreak(sort).map(|c| model.get(c)).collect(),
+        }))
+    }
+
+    /// The records after `anchor` in `sort` order, or level with it too if
+    /// `inclusive`, as conditions on consecutive runs of the list: records
+    /// with a sort value, and those without, in the order the database sorts
+    /// `NULL`s. Each run is one range of an index on the sort column and key,
+    /// which a single condition joined with `OR` would not be.
+    fn after(
+        &self,
+        backend: DbBackend,
+        sort: &Sort<E>,
+        anchor: &Anchor,
+        inclusive: bool,
+    ) -> Vec<Expr> {
+        let mut keys = Vec::new();
+        let mut key_values = Vec::new();
+        for (col, value) in self.tiebreak(sort).zip(&anchor.keys) {
+            keys.push(Expr::col((E::default(), col)));
+            // Postgres enums compare only with values cast to their type.
+            key_values.push(col.save_as(Expr::val(value.clone())));
+        }
+        let sorted = sort.expr();
+        if anchor.sort == anchor.sort.as_null() {
+            // Key columns are never NULL, so the sort column is not one, and
+            // the key alone orders the records with no sort value.
+            let nulls = sorted.clone().is_null().and(sort.later(
+                Expr::tuple(keys),
+                Expr::tuple(key_values),
+                inclusive,
+            ));
+            if sort.nulls_first(backend) {
+                vec![nulls, sorted.is_not_null()]
+            } else {
+                vec![nulls]
+            }
+        } else {
+            let value = Expr::val(anchor.sort.clone());
+            keys.insert(0, sorted.clone());
+            key_values.insert(
+                0,
+                if sort.json {
+                    value
+                } else {
+                    sort.col.save_as(value)
+                },
+            );
+            let values = sort.later(Expr::tuple(keys), Expr::tuple(key_values), inclusive);
+            if sort.nullable && !sort.nulls_first(backend) {
+                vec![values, sorted.is_null()]
+            } else {
+                vec![values]
             }
         }
-        Ok(query)
+    }
+
+    /// Up to `limit` records of `query` in `sort` order, after `from` (or
+    /// from it, if inclusive) when given.
+    async fn fetch(
+        &self,
+        db: &DatabaseConnection,
+        query: Select<E>,
+        sort: &Sort<E>,
+        from: Option<(&Anchor, bool)>,
+        limit: u64,
+    ) -> AdminResult<Vec<E::Model>> {
+        let Some((anchor, inclusive)) = from else {
+            return Ok(self.ordered(query, sort).limit(limit).all(db).await?);
+        };
+        let mut models = Vec::new();
+        for run in self.after(db.get_database_backend(), sort, anchor, inclusive) {
+            let missing = limit.saturating_sub(models.len() as u64);
+            if missing == 0 {
+                break;
+            }
+            let select = self.ordered(query.clone().filter(run), sort);
+            models.extend(select.limit(missing).all(db).await?);
+        }
+        Ok(models)
+    }
+
+    fn page(&self, models: &[E::Model], per_page: u64, prev: bool, next: bool) -> Page {
+        let records: Vec<Record> = models.iter().map(|m| self.record(m)).collect();
+        Page {
+            prev: records.first().filter(|_| prev).map(|r| r.key.clone()),
+            next: records.last().filter(|_| next).map(|r| r.key.clone()),
+            records,
+            per_page,
+        }
+    }
+
+    async fn first_page(
+        &self,
+        db: &DatabaseConnection,
+        query: Select<E>,
+        sort: &Sort<E>,
+        per_page: u64,
+    ) -> AdminResult<Page> {
+        let mut models = self.fetch(db, query, sort, None, per_page + 1).await?;
+        let more = truncate(&mut models, per_page);
+        Ok(self.page(&models, per_page, false, more))
+    }
+
+    /// The page that ends just before `anchor`, or with it if `inclusive`.
+    async fn page_before(
+        &self,
+        db: &DatabaseConnection,
+        query: Select<E>,
+        sort: &Sort<E>,
+        anchor: &Anchor,
+        inclusive: bool,
+        per_page: u64,
+    ) -> AdminResult<Page> {
+        let backwards = sort.reversed();
+        let mut models = self
+            .fetch(
+                db,
+                query.clone(),
+                &backwards,
+                Some((anchor, inclusive)),
+                per_page + 1,
+            )
+            .await?;
+        if !truncate(&mut models, per_page) {
+            // These reach the start of the list: show a full first page.
+            return self.first_page(db, query, sort, per_page).await;
+        }
+        models.reverse();
+        Ok(self.page(&models, per_page, true, !inclusive))
     }
 
     fn apply_input(
@@ -800,27 +1104,71 @@ where
         &self.meta
     }
 
-    async fn count(&self, db: &DatabaseConnection) -> AdminResult<u64> {
-        Ok(E::find().count(db).await?)
+    async fn count(&self, db: &DatabaseConnection, params: &ListParams) -> AdminResult<Count> {
+        let backend = db.get_database_backend();
+        let matches = self
+            .query(backend, params)?
+            .select_only()
+            .column(self.pk[0])
+            .limit(COUNT_LIMIT + 1)
+            .into_query();
+        let stmt = Query::select()
+            .expr(Func::count(Expr::col(Asterisk)))
+            .from_subquery(matches, Alias::new("matches"))
+            .to_owned();
+        let counted: i64 = match db.query_one(&stmt).await? {
+            Some(row) => row.try_get_by_index(0)?,
+            None => 0,
+        };
+        let counted = u64::try_from(counted).unwrap_or_default();
+        if counted <= COUNT_LIMIT {
+            return Ok(Count::Exact(counted));
+        }
+        if backend == DbBackend::Postgres
+            && !self.filtered(params)
+            && let Some(estimate) = estimate(db, &E::default()).await?
+            && estimate > COUNT_LIMIT
+        {
+            return Ok(Count::Estimate(estimate));
+        }
+        Ok(Count::MoreThan(COUNT_LIMIT))
     }
 
     async fn list(&self, db: &DatabaseConnection, params: &ListParams) -> AdminResult<Page> {
         let per_page = params.per_page.unwrap_or(self.meta.per_page);
-        // Databases take a signed 64-bit offset.
-        let offset = (params.page - 1)
-            .checked_mul(per_page)
-            .filter(|offset| i64::try_from(*offset).is_ok())
-            .ok_or_else(|| AdminError::bad_request("`page` is too large"))?;
-        let query = self.ordered(params)?;
-        let total = self.query(params)?.count(db).await?;
-        let models = query.offset(offset).limit(per_page).all(db).await?;
-        Ok(Page {
-            records: models.iter().map(|m| self.record(m)).collect(),
-            total,
-            page: params.page,
-            per_page,
-            pages: total.div_ceil(per_page),
-        })
+        let sort = self.sort(params)?;
+        let query = self.query(db.get_database_backend(), params)?;
+        let (key, forward) = match &params.cursor {
+            Some(Cursor::After(key)) => (key, true),
+            Some(Cursor::Before(key)) => (key, false),
+            None => return self.first_page(db, query, &sort, per_page).await,
+        };
+        // A cursor whose record is gone starts the list over.
+        let Some(anchor) = self.anchor(db, &sort, key).await? else {
+            return self.first_page(db, query, &sort, per_page).await;
+        };
+        if !forward {
+            return self
+                .page_before(db, query, &sort, &anchor, false, per_page)
+                .await;
+        }
+        let mut models = self
+            .fetch(
+                db,
+                query.clone(),
+                &sort,
+                Some((&anchor, false)),
+                per_page + 1,
+            )
+            .await?;
+        if models.is_empty() {
+            // The records after the cursor are gone: show the page ending with it.
+            return self
+                .page_before(db, query, &sort, &anchor, true, per_page)
+                .await;
+        }
+        let more = truncate(&mut models, per_page);
+        Ok(self.page(&models, per_page, true, more))
     }
 
     async fn get(&self, db: &DatabaseConnection, key: &str) -> AdminResult<Record> {
@@ -871,7 +1219,7 @@ where
         params: &ListParams,
         idle_limit: Duration,
     ) -> AdminResult<CsvStream> {
-        let query = self.query(params)?;
+        let query = self.query(db.get_database_backend(), params)?;
         let header = csv_chunk([self.columns.iter().map(|c| c.name.as_str())])?;
         let export = Export {
             txn: Some(snapshot(db, idle_limit).await?),
@@ -899,20 +1247,23 @@ where
                 .find(|c| c.col.as_str() == self.pk[0].as_str())
                 .ok_or(AdminError::NotFound)?,
         };
-        let params = ListParams {
-            page: 1,
-            ..ListParams::default()
-        };
-        let mut select = self.ordered(&params)?;
+        let backend = db.get_database_backend();
+        let sort = self.sort(&ListParams::default())?;
+        let mut select = self.ordered(E::find(), &sort);
         if let Some(q) = q.map(str::trim).filter(|q| !q.is_empty()) {
-            // The search fields contain `q`, or the picked value (usually
-            // the key) starts with it, so records without text fields can be
-            // found too.
-            let prefix = format!("{}%", escape_like(&q.to_lowercase()));
-            select = select.filter(
-                self.search_condition(q)
-                    .add(lowered(value_col).like(LikeExpr::new(prefix).escape('\\'))),
-            );
+            // The search fields match `q`, or the picked value (usually the
+            // key) starts with it or, if it is not text, equals it, so records
+            // without text fields can be found too.
+            let picked = if value_col.kind.is_textual() {
+                Some(like(
+                    backend,
+                    Expr::col((E::default(), value_col.col)),
+                    format!("{}%", escape_like(q)),
+                ))
+            } else {
+                Self::exact(value_col, q).map(|v| value_col.col.eq(v))
+            };
+            select = select.filter(self.search_condition(backend, q).add_option(picked));
         }
         let value_col = value_col.col;
         let models = select.limit(limit).all(db).await?;
@@ -973,6 +1324,14 @@ where
             .await
             .map_err(|err| action_error(name, err))
     }
+}
+
+/// Cut `models` down to `per_page`, returning whether there were more.
+fn truncate<M>(models: &mut Vec<M>, per_page: u64) -> bool {
+    let per_page = usize::try_from(per_page).unwrap_or(usize::MAX);
+    let more = models.len() > per_page;
+    models.truncate(per_page);
+    more
 }
 
 /// What the client learns of a failed action, following Loco's own rule for

@@ -133,7 +133,13 @@ async fn lists_creates_updates_and_deletes() {
             .authorization_bearer(&token)
             .await
             .json::<Value>();
-        assert_eq!(list["total"], 5);
+        assert_eq!(list["records"].as_array().unwrap().len(), 5);
+        let count = request
+            .get("/admin/api/models/articles/count?filter.status=published")
+            .authorization_bearer(&token)
+            .await
+            .json::<Value>();
+        assert_eq!(count["count"], json!({"kind": "exact", "value": 5}));
         assert_eq!(
             list["records"][0]["values"]["title"],
             "100% uptime is a myth"

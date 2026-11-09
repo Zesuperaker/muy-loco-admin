@@ -20,7 +20,7 @@ function bodies(fetchMock: ReturnType<typeof mockFetch>["fetchMock"], method: st
 }
 
 function pageOf(records: unknown[], extra: Record<string, unknown> = {}) {
-  return { records, total: records.length, page: 1, per_page: 25, pages: 1, labels: {}, ...extra };
+  return { records, per_page: 25, next: null, prev: null, labels: {}, ...extra };
 }
 
 /** A post as the server writes it, with `user_id` and `meta` as given (raw JSON). */
@@ -110,15 +110,15 @@ describe("list state", () => {
   it("leaving an unchanged text filter keeps the page", async () => {
     mockFetch(
       baseRoutes({
-        "GET /admin/api/models/posts/records": { body: pageOf([postRecord(1)], { page: 3, pages: 3, total: 60 }) },
+        "GET /admin/api/models/posts/records": { body: pageOf([postRecord(1)], { prev: "1" }) },
       }),
     );
     const user = userEvent.setup();
-    renderApp("/admin/models/posts?page=3");
+    renderApp("/admin/models/posts?after=3");
     await screen.findByRole("table");
     await user.click(screen.getByLabelText("Views"));
     await user.click(screen.getByRole("heading", { name: "Posts" }));
-    expect(currentLocation()).toBe("/models/posts?page=3");
+    expect(currentLocation()).toBe("/models/posts?after=3");
     await user.type(screen.getByLabelText("Views"), "5");
     await user.click(screen.getByRole("heading", { name: "Posts" }));
     expect(currentLocation()).toBe("/models/posts?filter.views=5");
@@ -130,15 +130,15 @@ describe("list state", () => {
     const { fetchMock, calls } = mockFetch(
       baseRoutes({
         "GET /admin/api/models/posts/records": (call) =>
-          call.url.includes("page=2")
-            ? { body: pageOf([postRecord(4), postRecord(5)], { page: 2, pages: 2, total: 4 }) }
-            : { body: pageOf([postRecord(1), postRecord(2)], { page: 1, pages: 2, total: 4 }) },
+          call.url.includes("after=2")
+            ? { body: pageOf([postRecord(4), postRecord(5)], { prev: "4" }) }
+            : { body: pageOf([postRecord(1), postRecord(2)], { next: "2" }) },
         "POST /admin/api/models/posts/bulk-delete": { body: { deleted: 2 } },
       }),
     );
     const impl = fetchMock.getMockImplementation()!;
     fetchMock.mockImplementation(async (input, init) => {
-      if (String(input).includes("page=2")) await gate;
+      if (String(input).includes("after=2")) await gate;
       return impl(input, init);
     });
     vi.spyOn(window, "confirm").mockReturnValue(true);

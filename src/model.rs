@@ -113,7 +113,10 @@ impl<E: EntityTrait> ModelAdmin<E> {
         self
     }
 
-    /// Columns matched by the search box (defaults to text columns).
+    /// Columns matched by the search box (defaults to text columns). Text
+    /// columns match when they contain the search, ignoring case; numbers,
+    /// dates, UUIDs and the like when they equal it. See
+    /// [Lists on large tables](crate#lists-on-large-tables).
     #[must_use]
     pub fn search_fields(mut self, fields: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.search_fields = Some(names(fields));

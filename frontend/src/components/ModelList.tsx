@@ -2,7 +2,7 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tansta
 import { type FormEvent, type MouseEvent, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
 import { type ListQuery, api, listSearch } from "../api";
-import { display, encodeKeyPart, keyText } from "../format";
+import { countNote, display, encodeKeyPart, formatCount, keyText } from "../format";
 import { paths } from "../paths";
 import type { AdminRecord, FieldMeta, Labels, ModelMeta } from "../types";
 import { ForeignKeyPicker } from "./ForeignKeyPicker";
@@ -20,8 +20,10 @@ export function queryFromSearch(search: URLSearchParams): ListQuery {
     if (key.startsWith("filter.")) filters[key.slice("filter.".length)] = value;
   }
   const order = search.get("order");
+  const after = search.get("after") || undefined;
   return {
-    page: Math.max(1, Number(search.get("page")) || 1),
+    after,
+    before: after ? undefined : search.get("before") || undefined,
     sort: search.get("sort") ?? undefined,
     order: order === "asc" || order === "desc" ? order : undefined,
     q: search.get("q") ?? undefined,
@@ -201,15 +203,23 @@ export function ModelList({ model, models }: { model: ModelMeta; models: ModelMe
     queryFn: () => api.list(model.name, query),
     placeholderData: keepPreviousData,
   });
+  // Counted once per search and filters, not on every page.
+  const count = useQuery({
+    queryKey: ["count", model.name, listSearch({ q: query.q, filters: query.filters })],
+    queryFn: () => api.count(model.name, query),
+    placeholderData: keepPreviousData,
+  });
 
+  /** Apply `changes`, back on the first page unless they name another. */
   const update = (changes: Partial<ListQuery>) => {
-    const next = listSearch({ ...query, page: 1, ...changes });
+    const next = listSearch({ ...query, after: undefined, before: undefined, ...changes });
     setSearch(new URLSearchParams(next.slice(1)));
   };
 
   const refresh = () => {
     setSelection({ scope, keys: new Set() });
     void queryClient.invalidateQueries({ queryKey: ["list", model.name] });
+    void queryClient.invalidateQueries({ queryKey: ["count", model.name] });
     void queryClient.invalidateQueries({ queryKey: ["stats"] });
   };
 
@@ -287,7 +297,11 @@ export function ModelList({ model, models }: { model: ModelMeta; models: ModelMe
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold">{model.label}</h1>
-          {page && <p className="text-sm text-slate-500">{page.total} total</p>}
+          {count.data && (
+            <p className="text-sm text-slate-500" title={countNote(count.data.count)}>
+              {formatCount(count.data.count)} total
+            </p>
+          )}
         </div>
         <div className="flex gap-2">
           {model.capabilities.export && (
@@ -460,19 +474,14 @@ export function ModelList({ model, models }: { model: ModelMeta; models: ModelMe
         </Card>
       )}
 
-      {page && page.pages > 1 && (
-        <nav aria-label="Pagination" className="flex items-center justify-between text-sm">
-          <span className="text-slate-500">
-            Page {page.page} of {page.pages}
-          </span>
-          <div className="flex gap-2">
-            <Button disabled={page.page <= 1} onClick={() => update({ page: page.page - 1 })}>
-              Previous
-            </Button>
-            <Button disabled={page.page >= page.pages} onClick={() => update({ page: page.page + 1 })}>
-              Next
-            </Button>
-          </div>
+      {page && (page.prev || page.next) && (
+        <nav aria-label="Pagination" className="flex justify-end gap-2 text-sm">
+          <Button disabled={!page.prev} onClick={() => update({ before: page.prev ?? undefined })}>
+            Previous
+          </Button>
+          <Button disabled={!page.next} onClick={() => update({ after: page.next ?? undefined })}>
+            Next
+          </Button>
         </nav>
       )}
     </div>

@@ -163,7 +163,11 @@ export function baseRoutes(extra: Record<string, Reply | Handler> = {}) {
     "GET /admin/api/config": { body: formConfig },
     "GET /admin/api/me": { body: { id: "1", name: "Ann" } },
     "GET /admin/api/schema": { body: { models: [usersModel, postsModel] } },
-    "GET /admin/api/stats": { body: { counts: { users: 2, posts: 5 } } },
+    "GET /admin/api/stats": {
+      body: { counts: { users: { kind: "exact", value: 2 }, posts: { kind: "exact", value: 5 } } },
+    },
+    "GET /admin/api/models/users/count": { body: { count: { kind: "exact", value: 2 } } },
+    "GET /admin/api/models/posts/count": { body: { count: { kind: "exact", value: 2 } } },
     ...extra,
   };
 }

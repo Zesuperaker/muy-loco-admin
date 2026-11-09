@@ -132,12 +132,22 @@ export interface AdminRecord {
 /** Foreign-key field name, then the key value as text, to the target label. */
 export type Labels = Record<string, Record<string, string>>;
 
+/**
+ * How many records a list has: exactly, more than `value` (counting stops there), or about
+ * `value` (Postgres's estimate for a whole table).
+ */
+export interface Count {
+  kind: "exact" | "more_than" | "estimate";
+  value: number;
+}
+
 export interface Page {
   records: AdminRecord[];
-  total: number;
-  page: number;
   per_page: number;
-  pages: number;
+  /** The `after` cursor of the next page. */
+  next: string | null;
+  /** The `before` cursor of the previous page. */
+  prev: string | null;
   labels: Labels;
 }
 

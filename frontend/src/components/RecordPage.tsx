@@ -58,6 +58,7 @@ function RecordForm({
     onSuccess: (res) => {
       setErrors({});
       void queryClient.invalidateQueries({ queryKey: ["list", model.name] });
+      void queryClient.invalidateQueries({ queryKey: ["count", model.name] });
       void queryClient.invalidateQueries({ queryKey: ["stats"] });
       queryClient.setQueryData(["record", model.name, res.record.key], res);
       if (isNew) {
@@ -80,6 +81,7 @@ function RecordForm({
     onSuccess: () => {
       notify("Deleted");
       void queryClient.invalidateQueries({ queryKey: ["list", model.name] });
+      void queryClient.invalidateQueries({ queryKey: ["count", model.name] });
       void queryClient.invalidateQueries({ queryKey: ["stats"] });
       navigate(paths.list(model.name), { replace: true });
     },

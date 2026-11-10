@@ -27,8 +27,8 @@ use serde_json::{Map, Value as Json};
 use crate::{
     error::{AdminError, AdminResult, FieldErrors},
     meta::{
-        ActionMeta, Capabilities, FieldKind, FieldMeta, ModelMeta, Ordering, RelationMeta,
-        SortDirection, enum_choices, humanize, max_length,
+        ActionMeta, Capabilities, FieldKind, FieldMeta, ModelMeta, Ordering, Pagination,
+        RelationMeta, SortDirection, enum_choices, humanize, max_length,
     },
     model::{Action, ModelAdmin},
     query::{Cursor, ListParams, NOT_NULL_FILTER, NULL_FILTER},
@@ -57,16 +57,19 @@ pub struct Record {
     pub values: Map<String, Json>,
 }
 
-/// One page of a list. Pages are found from their neighbors' records, not by
-/// number, so a page reads only its own rows wherever it is in the list.
+/// One page of a list.
 #[derive(Debug, Clone, Serialize)]
 #[allow(clippy::struct_field_names)]
 pub struct Page {
     pub records: Vec<Record>,
     pub per_page: u64,
-    /// The `after` cursor of the next page, if there is one.
+    /// The page's number, when the list has numbered pages.
+    pub page: Option<u64>,
+    /// What fetches the next page, if there is one: its number, or with
+    /// cursor pagination its `after` cursor.
     pub next: Option<String>,
-    /// The `before` cursor of the previous page, if there is one.
+    /// What fetches the previous page, if there is one: its number, or with
+    /// cursor pagination its `before` cursor.
     pub prev: Option<String>,
 }
 
@@ -97,8 +100,12 @@ pub(crate) type CsvStream = BoxStream<'static, AdminResult<Bytes>>;
 #[async_trait]
 pub(crate) trait Resource: Send + Sync {
     fn meta(&self) -> &ModelMeta;
-    /// The records matching `params`' search and filters.
+    /// The records matching `params`' search and filters: exact for numbered
+    /// pages, which need the total, and up to [`COUNT_LIMIT`] with cursor
+    /// pagination.
     async fn count(&self, db: &DatabaseConnection, params: &ListParams) -> AdminResult<Count>;
+    /// The model's records, up to [`COUNT_LIMIT`], for the dashboard.
+    async fn size(&self, db: &DatabaseConnection) -> AdminResult<Count>;
     async fn list(&self, db: &DatabaseConnection, params: &ListParams) -> AdminResult<Page>;
     async fn get(&self, db: &DatabaseConnection, key: &str) -> AdminResult<Record>;
     /// Insert a record from `input`. Fields in `locked` are read-only, like
@@ -637,6 +644,11 @@ where
                 .per_page
                 .unwrap_or(DEFAULT_PER_PAGE)
                 .clamp(1, crate::query::MAX_PER_PAGE),
+            pagination: if config.cursor_pagination {
+                Pagination::Cursor
+            } else {
+                Pagination::Pages
+            },
             display_field,
             actions: config
                 .actions
@@ -937,7 +949,78 @@ where
             next: records.last().filter(|_| next).map(|r| r.key.clone()),
             records,
             per_page,
+            page: None,
         }
+    }
+
+    /// Page `page` of `query` in `sort` order, which skips the records of the
+    /// pages before it.
+    async fn numbered_page(
+        &self,
+        db: &DatabaseConnection,
+        query: Select<E>,
+        sort: &Sort<E>,
+        page: u64,
+        per_page: u64,
+    ) -> AdminResult<Page> {
+        let page = Ord::max(page, 1);
+        // Databases take a signed 64-bit offset.
+        let offset = (page - 1)
+            .checked_mul(per_page)
+            .filter(|offset| i64::try_from(*offset).is_ok())
+            .ok_or_else(|| AdminError::bad_request("`page` is too large"))?;
+        let mut models = self
+            .ordered(query, sort)
+            .offset(offset)
+            .limit(per_page + 1)
+            .all(db)
+            .await?;
+        let more = truncate(&mut models, per_page);
+        Ok(Page {
+            records: models.iter().map(|m| self.record(m)).collect(),
+            per_page,
+            page: Some(page),
+            next: more.then(|| (page + 1).to_string()),
+            prev: (page > 1).then(|| (page - 1).to_string()),
+        })
+    }
+
+    /// How many records match `params`, stopping after `limit` if given.
+    async fn count_up_to(
+        &self,
+        db: &DatabaseConnection,
+        params: &ListParams,
+        limit: Option<u64>,
+    ) -> AdminResult<Count> {
+        let backend = db.get_database_backend();
+        let mut matches = self
+            .query(backend, params)?
+            .select_only()
+            .column(self.pk[0]);
+        if let Some(limit) = limit {
+            matches = matches.limit(limit + 1);
+        }
+        let matches = matches.into_query();
+        let stmt = Query::select()
+            .expr(Func::count(Expr::col(Asterisk)))
+            .from_subquery(matches, Alias::new("matches"))
+            .to_owned();
+        let counted: i64 = match db.query_one(&stmt).await? {
+            Some(row) => row.try_get_by_index(0)?,
+            None => 0,
+        };
+        let counted = u64::try_from(counted).unwrap_or_default();
+        let Some(limit) = limit.filter(|limit| counted > *limit) else {
+            return Ok(Count::Exact(counted));
+        };
+        if backend == DbBackend::Postgres
+            && !self.filtered(params)
+            && let Some(estimate) = estimate(db, &E::default()).await?
+            && estimate > limit
+        {
+            return Ok(Count::Estimate(estimate));
+        }
+        Ok(Count::MoreThan(limit))
     }
 
     async fn first_page(
@@ -1095,39 +1178,24 @@ where
     }
 
     async fn count(&self, db: &DatabaseConnection, params: &ListParams) -> AdminResult<Count> {
-        let backend = db.get_database_backend();
-        let matches = self
-            .query(backend, params)?
-            .select_only()
-            .column(self.pk[0])
-            .limit(COUNT_LIMIT + 1)
-            .into_query();
-        let stmt = Query::select()
-            .expr(Func::count(Expr::col(Asterisk)))
-            .from_subquery(matches, Alias::new("matches"))
-            .to_owned();
-        let counted: i64 = match db.query_one(&stmt).await? {
-            Some(row) => row.try_get_by_index(0)?,
-            None => 0,
-        };
-        let counted = u64::try_from(counted).unwrap_or_default();
-        if counted <= COUNT_LIMIT {
-            return Ok(Count::Exact(counted));
-        }
-        if backend == DbBackend::Postgres
-            && !self.filtered(params)
-            && let Some(estimate) = estimate(db, &E::default()).await?
-            && estimate > COUNT_LIMIT
-        {
-            return Ok(Count::Estimate(estimate));
-        }
-        Ok(Count::MoreThan(COUNT_LIMIT))
+        let limit = (self.meta.pagination == Pagination::Cursor).then_some(COUNT_LIMIT);
+        self.count_up_to(db, params, limit).await
+    }
+
+    async fn size(&self, db: &DatabaseConnection) -> AdminResult<Count> {
+        self.count_up_to(db, &ListParams::default(), Some(COUNT_LIMIT))
+            .await
     }
 
     async fn list(&self, db: &DatabaseConnection, params: &ListParams) -> AdminResult<Page> {
         let per_page = params.per_page.unwrap_or(self.meta.per_page);
         let sort = self.sort(params)?;
         let query = self.query(db.get_database_backend(), params)?;
+        if self.meta.pagination == Pagination::Pages {
+            return self
+                .numbered_page(db, query, &sort, params.page, per_page)
+                .await;
+        }
         let (key, forward) = match &params.cursor {
             Some(Cursor::After(key)) => (key, true),
             Some(Cursor::Before(key)) => (key, false),

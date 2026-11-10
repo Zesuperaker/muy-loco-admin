@@ -32,7 +32,8 @@ describe("basePath", () => {
 describe("listSearch", () => {
   it("builds query strings", () => {
     expect(listSearch({})).toBe("");
-    expect(listSearch({ after: "", before: "" })).toBe("");
+    expect(listSearch({ page: 1, after: "", before: "" })).toBe("");
+    expect(listSearch({ page: 2, sort: "title" })).toBe("?page=2&sort=title");
     expect(listSearch({ before: "a,b" })).toBe("?before=a%2Cb");
     expect(
       listSearch({
@@ -107,7 +108,7 @@ describe("requests", () => {
 
   it("downloads CSV exports", async () => {
     const { calls } = mockFetch({ "GET /admin/api/models/posts/export": { text: "id\n1\n" } });
-    const blob = await api.exportCsv("posts", { after: "3", q: "x" });
+    const blob = await api.exportCsv("posts", { page: 2, after: "3", q: "x" });
     expect(await blob.text()).toBe("id\n1\n");
     expect(calls[0]!.url).toBe("/admin/api/models/posts/export?q=x");
     expect(calls[0]!.headers.get("Accept")).toBe("text/csv");

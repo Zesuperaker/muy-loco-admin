@@ -27,9 +27,12 @@ pub(crate) enum Cursor {
     Before(String),
 }
 
-/// Parsed `?after=&before=&per_page=&sort=&order=&q=&filter.<field>=` parameters.
+/// Parsed `?page=&after=&before=&per_page=&sort=&order=&q=&filter.<field>=`
+/// parameters. Lists with numbered pages read `page`, and lists with cursor
+/// pagination `after` or `before`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct ListParams {
+    pub page: u64,
     pub cursor: Option<Cursor>,
     pub per_page: Option<u64>,
     pub sort: Option<String>,
@@ -46,9 +49,13 @@ fn parse_u64(name: &str, raw: &str) -> AdminResult<u64> {
 
 impl ListParams {
     pub(crate) fn from_query(query: &HashMap<String, String>) -> AdminResult<Self> {
-        let mut params = Self::default();
+        let mut params = Self {
+            page: 1,
+            ..Self::default()
+        };
         for (key, raw) in query {
             match key.as_str() {
+                "page" => params.page = parse_u64("page", raw)?.max(1),
                 "after" if !raw.is_empty() => {
                     if params.cursor.is_some() {
                         return Err(AdminError::bad_request(BOTH_CURSORS));
@@ -107,7 +114,7 @@ mod tests {
     #[test]
     fn defaults() {
         let p = ListParams::from_query(&HashMap::new()).unwrap();
-        assert_eq!(p, ListParams::default());
+        assert_eq!(p.page, 1);
         assert_eq!(p.cursor, None);
         assert_eq!(p.per_page, None);
     }
@@ -127,6 +134,7 @@ mod tests {
             ("unrelated", "x"),
         ]))
         .unwrap();
+        assert_eq!(p.page, 2);
         assert_eq!(p.cursor, Some(Cursor::After("3".to_string())));
         assert_eq!(p.per_page, Some(MAX_PER_PAGE));
         assert_eq!(p.sort.as_deref(), Some("title"));
@@ -145,7 +153,14 @@ mod tests {
 
     #[test]
     fn edge_values() {
-        let p = ListParams::from_query(&q(&[("q", "  "), ("order", ""), ("sort", "")])).unwrap();
+        let p = ListParams::from_query(&q(&[
+            ("page", "0"),
+            ("q", "  "),
+            ("order", ""),
+            ("sort", ""),
+        ]))
+        .unwrap();
+        assert_eq!(p.page, 1);
         assert_eq!(p.q, None);
         assert_eq!(p.order, None);
         assert_eq!(p.sort, None);
@@ -156,6 +171,7 @@ mod tests {
 
     #[test]
     fn rejects_bad_values() {
+        assert!(ListParams::from_query(&q(&[("page", "x")])).is_err());
         assert!(ListParams::from_query(&q(&[("per_page", "-1")])).is_err());
         assert!(ListParams::from_query(&q(&[("order", "sideways")])).is_err());
         let err = ListParams::from_query(&q(&[("after", "1"), ("before", "2")])).unwrap_err();

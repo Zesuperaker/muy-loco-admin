@@ -91,6 +91,8 @@ const model = (name: string) => `/models/${encodeURIComponent(name)}`;
 const record = (name: string, key: string) => `${model(name)}/records/${encodeURIComponent(key)}`;
 
 export interface ListQuery {
+  /** The page's number, with numbered pages. */
+  page?: number;
   /** Records after the one with this key. */
   after?: string;
   /** Records before the one with this key. */
@@ -104,6 +106,7 @@ export interface ListQuery {
 
 export function listSearch(query: ListQuery): string {
   const params = new URLSearchParams();
+  if (query.page && query.page > 1) params.set("page", String(query.page));
   if (query.after) params.set("after", query.after);
   else if (query.before) params.set("before", query.before);
   if (query.per_page) params.set("per_page", String(query.per_page));
@@ -152,7 +155,7 @@ export const api = {
     return json<{ choices: Choice[] }>(`${model(name)}/lookup?${params.toString()}`);
   },
   exportCsv: async (name: string, query: ListQuery): Promise<Blob> => {
-    const all = { ...query, after: undefined, before: undefined };
+    const all = { ...query, page: undefined, after: undefined, before: undefined };
     const res = await request(`${model(name)}/export${listSearch(all)}`, {
       headers: { Accept: "text/csv" },
     });

@@ -60,6 +60,19 @@ async fn client() -> (TestDb, AppContext, Client) {
     (db, ctx, Client::new(router))
 }
 
+/// The admin with cursor pagination on the models whose lists tests page.
+async fn cursor_client(ctx: &AppContext) -> Client {
+    let router = Admin::new(AllowAll)
+        .register(ModelAdmin::<users::Entity>::new().can_create(false))
+        .register(ModelAdmin::<posts::Entity>::new().cursor_pagination())
+        .register(ModelAdmin::<post_tags::Entity>::new().cursor_pagination())
+        .register(ModelAdmin::<notes::Entity>::new().cursor_pagination())
+        .router(ctx)
+        .await
+        .expect("router");
+    Client::new(router)
+}
+
 fn model<'a>(schema: &'a Value, name: &str) -> &'a Value {
     schema["models"]
         .as_array()
@@ -407,6 +420,10 @@ async fn list_paginates_sorts_and_labels() {
             .map(|r| r["values"]["title"].as_str().unwrap().to_string())
             .collect()
     };
+    let schema = client.get("/api/schema").await.json();
+    assert_eq!(model(&schema, "posts")["pagination"], "pages");
+
+    // Numbered pages, by default.
     let first = client.get("/api/models/posts/records?per_page=3").await;
     assert_eq!(first.status, 200);
     let first = first.json();
@@ -416,47 +433,27 @@ async fn list_paginates_sorts_and_labels() {
         "default order is id desc"
     );
     assert_eq!(first["per_page"], 3);
+    assert_eq!(first["page"], 1);
     assert_eq!(first["prev"], Value::Null);
-    assert_eq!(first["next"], first["records"][2]["key"]);
-
-    let next = first["next"].as_str().unwrap();
+    assert_eq!(first["next"], "2");
     let body = client
-        .get(&format!(
-            "/api/models/posts/records?per_page=3&after={next}"
-        ))
+        .get("/api/models/posts/records?per_page=3&page=2")
         .await
         .json();
     assert_eq!(titles(&body), ["Post 4", "Post 3", "Post 2"]);
-    assert_eq!(body["prev"], body["records"][0]["key"]);
-    assert_eq!(body["next"], body["records"][2]["key"]);
+    assert_eq!((&body["prev"], &body["next"]), (&json!("1"), &json!("3")));
     assert_eq!(body["labels"]["user_id"][ann.id.to_string()], "ann");
-    let prev = body["prev"].as_str().unwrap();
-    let back = client
-        .get(&format!(
-            "/api/models/posts/records?per_page=3&before={prev}"
-        ))
+    let body = client
+        .get("/api/models/posts/records?per_page=3&page=3")
         .await
         .json();
-    assert_eq!(back["records"], first["records"]);
-    assert_eq!(back["prev"], Value::Null, "the first page has no previous");
-
-    let next = body["next"].as_str().unwrap();
-    let last = client
-        .get(&format!(
-            "/api/models/posts/records?per_page=3&after={next}"
-        ))
+    assert_eq!(titles(&body), ["Post 1"]);
+    assert_eq!(body["next"], Value::Null);
+    let body = client
+        .get("/api/models/posts/records?per_page=3&page=9")
         .await
         .json();
-    assert_eq!(titles(&last), ["Post 1"]);
-    assert_eq!(last["next"], Value::Null);
-    let prev = last["prev"].as_str().unwrap();
-    let back = client
-        .get(&format!(
-            "/api/models/posts/records?per_page=3&before={prev}"
-        ))
-        .await
-        .json();
-    assert_eq!(back["records"], body["records"]);
+    assert_eq!(body["records"], json!([]), "past the last page");
     assert_eq!(
         client.get("/api/models/posts/count").await.json(),
         json!({"count": exact(7)})
@@ -487,11 +484,81 @@ async fn list_paginates_sorts_and_labels() {
         .get("/api/models/posts/records?after=1&before=2")
         .await;
     assert_eq!(res.status, 400);
+    let res = client.get("/api/models/posts/records?page=abc").await;
+    assert_eq!(res.status, 400);
     let res = client.get("/api/models/nothing/records").await;
     assert_eq!(res.status, 404);
 
     let body = client.get("/api/models/notes/records").await.json();
     assert_eq!(body["per_page"], 2, "model default page size");
+}
+
+#[tokio::test]
+async fn cursor_pagination_pages_from_records() {
+    let (db, ctx, _) = client().await;
+    let ann = create_user(&db.db, "ann@example.com", true).await;
+    for i in 1..=7 {
+        create_post(&db.db, ann.id, &format!("Post {i}")).await;
+    }
+    let titles = |body: &Value| -> Vec<String> {
+        body["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["values"]["title"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let cursors = cursor_client(&ctx).await;
+    let schema = cursors.get("/api/schema").await.json();
+    assert_eq!(model(&schema, "posts")["pagination"], "cursor");
+    let first = cursors
+        .get("/api/models/posts/records?per_page=3")
+        .await
+        .json();
+    assert_eq!(titles(&first), ["Post 7", "Post 6", "Post 5"]);
+    assert_eq!(first["page"], Value::Null);
+    assert_eq!(first["prev"], Value::Null);
+    assert_eq!(first["next"], first["records"][2]["key"]);
+
+    let next = first["next"].as_str().unwrap();
+    let body = cursors
+        .get(&format!(
+            "/api/models/posts/records?per_page=3&after={next}"
+        ))
+        .await
+        .json();
+    assert_eq!(titles(&body), ["Post 4", "Post 3", "Post 2"]);
+    assert_eq!(body["prev"], body["records"][0]["key"]);
+    assert_eq!(body["next"], body["records"][2]["key"]);
+    let prev = body["prev"].as_str().unwrap();
+    let back = cursors
+        .get(&format!(
+            "/api/models/posts/records?per_page=3&before={prev}"
+        ))
+        .await
+        .json();
+    assert_eq!(back["records"], first["records"]);
+    assert_eq!(back["prev"], Value::Null, "the first page has no previous");
+
+    let next = body["next"].as_str().unwrap();
+    let last = cursors
+        .get(&format!(
+            "/api/models/posts/records?per_page=3&after={next}"
+        ))
+        .await
+        .json();
+    assert_eq!(titles(&last), ["Post 1"]);
+    assert_eq!(last["next"], Value::Null);
+    let prev = last["prev"].as_str().unwrap();
+    let back = cursors
+        .get(&format!(
+            "/api/models/posts/records?per_page=3&before={prev}"
+        ))
+        .await
+        .json();
+    assert_eq!(back["records"], body["records"]);
+
+    assert_eq!(body["labels"]["user_id"][ann.id.to_string()], "ann");
 }
 
 #[tokio::test]
@@ -1285,10 +1352,18 @@ async fn lookup_finds_records_by_key() {
 }
 
 #[tokio::test]
-async fn json_filters_are_bad_requests() {
+async fn out_of_range_pages_and_json_filters_are_bad_requests() {
     let (db, _ctx, client) = client().await;
     let user = create_user(&db.db, "ann@example.com", true).await;
     create_post(&db.db, user.id, "p").await;
+    for uri in [
+        "/api/models/posts/records?page=999999999999999999",
+        "/api/models/posts/records?page=36893488147419103&per_page=500",
+    ] {
+        let res = client.get(uri).await;
+        assert_eq!(res.status, 400, "{uri}: {}", res.text());
+        assert_eq!(res.json()["error"], "`page` is too large");
+    }
     let res = client
         .get("/api/models/posts/records?filter.meta=%7B%7D")
         .await;
@@ -1340,8 +1415,12 @@ async fn assert_pages_walk(client: &Client, list: &str, per_page: u64) {
         let client = client.clone();
         async move { client.get(&uri).await.json() }
     };
-    let cursor =
-        |name: &str, key: &str| format!("&{name}={}", utf8_percent_encode(key, NON_ALPHANUMERIC));
+    // Numbered pages go by `page`, cursor pagination by `after` and `before`.
+    let numbered = client.get(&format!("{list}&per_page=1")).await.json()["page"].is_number();
+    let cursor = |name: &str, key: &str| {
+        let name = if numbered { "page" } else { name };
+        format!("&{name}={}", utf8_percent_encode(key, NON_ALPHANUMERIC))
+    };
     let all = keys(&client.get(&format!("{list}&per_page=500")).await.json());
     assert!(all.len() as u64 > per_page, "{list}: too few records");
 
@@ -1369,7 +1448,8 @@ async fn assert_pages_walk(client: &Client, list: &str, per_page: u64) {
 #[tokio::test]
 async fn pages_walk_every_record_once_in_any_order() {
     use sea_orm::prelude::{ChronoDate, ChronoTime, Uuid};
-    let (db, _ctx, client) = client().await;
+    let (db, ctx, numbered) = client().await;
+    let client = cursor_client(&ctx).await;
     let ann = create_user(&db.db, "ann@example.com", true).await;
     let date = |d| ChronoDate::from_ymd_opt(2024, 1, d);
     // Ties and NULLs in every column, so the key has to break them.
@@ -1459,6 +1539,9 @@ async fn pages_walk_every_record_once_in_any_order() {
             assert_pages_walk(&client, list, per_page).await;
         }
     }
+    for list in &lists[..3] {
+        assert_pages_walk(&numbered, list, 4).await;
+    }
 
     // NULLs sort where the database puts them, so its indexes serve the list.
     let body = client
@@ -1475,7 +1558,8 @@ async fn pages_walk_every_record_once_in_any_order() {
 
 #[tokio::test]
 async fn cursors_whose_records_are_gone_still_find_a_page() {
-    let (db, _ctx, client) = client().await;
+    let (db, ctx, _) = client().await;
+    let client = cursor_client(&ctx).await;
     let ann = create_user(&db.db, "ann@example.com", true).await;
     let mut ids = Vec::new();
     for i in 1..=5 {
@@ -1532,7 +1616,7 @@ async fn cursors_whose_records_are_gone_still_find_a_page() {
 
 #[tokio::test]
 async fn counts_stop_at_the_limit() {
-    let (db, _ctx, client) = client().await;
+    let (db, ctx, client) = client().await;
     let ann = create_user(&db.db, "ann@example.com", true).await;
     if is_postgres() {
         // Postgres's estimate stays unknown until the test analyzes the table.
@@ -1542,8 +1626,14 @@ async fn counts_stop_at_the_limit() {
             .unwrap();
     }
     insert_posts(&db.db, ann.id, 10_050).await;
+    assert_eq!(
+        client.get("/api/models/posts/count").await.json()["count"],
+        exact(10_050),
+        "numbered pages count every record"
+    );
+    let cursors = cursor_client(&ctx).await;
     let count = |query: &'static str| {
-        let client = client.clone();
+        let client = cursors.clone();
         async move {
             client
                 .get(&format!("/api/models/posts/count{query}"))
@@ -1561,7 +1651,10 @@ async fn counts_stop_at_the_limit() {
         "counts below the limit are exact"
     );
     let stats = client.get("/api/stats").await.json();
-    assert_eq!(stats["counts"]["posts"], more);
+    assert_eq!(
+        stats["counts"]["posts"], more,
+        "the dashboard stops counting for numbered pages too"
+    );
     assert_eq!(stats["counts"]["users"], exact(1));
 
     if is_postgres() {
@@ -1678,7 +1771,7 @@ async fn pages_walk_padded_text() {
         .await
         .unwrap();
     let router = Admin::new(AllowAll)
-        .model::<codes::Entity>()
+        .register(ModelAdmin::<codes::Entity>::new().cursor_pagination())
         .router(&ctx)
         .await
         .unwrap();

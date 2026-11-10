@@ -401,10 +401,7 @@ async fn stats(
         if !access.can_view(&model.meta) {
             continue;
         }
-        let count = model
-            .resource
-            .count(&state.0.ctx.db, &ListParams::default())
-            .await?;
+        let count = model.resource.size(&state.0.ctx.db).await?;
         counts.insert(model.meta.name.clone(), count);
     }
     Ok(Json(json!({ "counts": counts })))

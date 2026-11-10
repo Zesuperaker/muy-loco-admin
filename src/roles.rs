@@ -508,6 +508,7 @@ mod tests {
                 direction: SortDirection::Desc,
             },
             per_page: 25,
+            pagination: crate::meta::Pagination::Pages,
             display_field: None,
             actions: actions
                 .iter()

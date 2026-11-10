@@ -121,6 +121,7 @@
 //! | [`show_fields`](ModelAdmin::show_fields) | none; shows such a column anyway (e.g. `prompt_tokens`) |
 //! | [`ordering`](ModelAdmin::ordering) | primary key, descending |
 //! | [`per_page`](ModelAdmin::per_page) | 25, at most [`MAX_PER_PAGE`] (500) |
+//! | [`cursor_pagination`](ModelAdmin::cursor_pagination) | off: numbered pages; see [Lists on large tables](#lists-on-large-tables) |
 //! | [`display_field`](ModelAdmin::display_field) | first of `name`, `title`, `label`, `email`, `username`, `slug`, `code`; labels the record in links and pickers |
 //! | [`can_create`](ModelAdmin::can_create), [`can_update`](ModelAdmin::can_update), [`can_delete`](ModelAdmin::can_delete), [`can_export`](ModelAdmin::can_export) | `true` |
 //! | [`read_only`](ModelAdmin::read_only) | off; turns off create, update and delete |
@@ -370,16 +371,26 @@
 //!
 //! # Lists on large tables
 //!
-//! A list reads only the rows it shows, wherever they are in the list:
+//! Lists have numbered pages by default, like Django's admin. A list counts all the records
+//! that match its search and filters (once, not on every page), and a page skips the records
+//! of the pages before it, so both take longer as a table grows. For a large table, switch the
+//! model to cursor pagination:
 //!
-//! - **Pages** start from the record before or after them, not from a page number, so the
-//!   database reads them from an index instead of skipping every row before them. Lists have
-//!   Previous and Next buttons rather than page numbers. The default ordering uses the primary
-//!   key's index; to sort a large list by another column, index it, ideally followed by the
-//!   primary key (`CREATE INDEX ... ON articles (published_at, id)`).
+//! ```rust,ignore
+//! .register(ModelAdmin::<events::Entity>::new().cursor_pagination())
+//! ```
+//!
+//! - **Pages** then start from the record before or after them, so the database reads each
+//!   page from an index instead of skipping every row before it. The list has Previous and
+//!   Next buttons rather than page numbers. The default ordering uses the primary key's index;
+//!   to sort a large list by another column, index it, ideally followed by the primary key
+//!   (`CREATE INDEX ... ON events (created_at, id)`).
 //! - **Counts** stop at 10,000. A larger count shows as "10,000+", or, for a whole table on
-//!   Postgres, as the estimate `ANALYZE` keeps ("~1.2M"). A list counts its records when its
-//!   search or filters change, not on every page.
+//!   Postgres, as the estimate `ANALYZE` keeps ("~1.2M").
+//!
+//! The dashboard's counts stop at 10,000 the same way for every model. Whatever the
+//! pagination:
+//!
 //! - **Search** matches text fields that contain the search, ignoring case: `ILIKE` on
 //!   Postgres, `LIKE` on SQLite. Other search fields, such as numbers, dates and UUIDs, match
 //!   when the search is one of their values (`42` finds 42, not 142), so their indexes serve it;

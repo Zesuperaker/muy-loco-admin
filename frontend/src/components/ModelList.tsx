@@ -22,6 +22,7 @@ export function queryFromSearch(search: URLSearchParams): ListQuery {
   const order = search.get("order");
   const after = search.get("after") || undefined;
   return {
+    page: Math.max(1, Number(search.get("page")) || 1),
     after,
     before: after ? undefined : search.get("before") || undefined,
     sort: search.get("sort") ?? undefined,
@@ -29,6 +30,33 @@ export function queryFromSearch(search: URLSearchParams): ListQuery {
     q: search.get("q") ?? undefined,
     filters,
   };
+}
+
+const GAP = "…";
+
+/** `from` to `to`, inclusive. */
+const span = (from: number, to: number) =>
+  Array.from({ length: Math.max(0, to - from + 1) }, (_, i) => from + i);
+
+/**
+ * The page numbers to offer, like Django's elided page range: every page of a short list, else
+ * the first and last pages and those around `current`, with gaps between.
+ */
+export function pageRange(current: number, total: number, onEachSide = 2, onEnds = 1) {
+  if (total <= (onEachSide + onEnds) * 2) return span(1, total);
+  const page = Math.min(current, total);
+  const out: (number | typeof GAP)[] = [];
+  if (page > 1 + onEachSide + onEnds + 1) {
+    out.push(...span(1, onEnds), GAP, ...span(page - onEachSide, page));
+  } else {
+    out.push(...span(1, page));
+  }
+  if (page < total - onEachSide - onEnds - 1) {
+    out.push(...span(page + 1, page + onEachSide), GAP, ...span(total - onEnds + 1, total));
+  } else {
+    out.push(...span(page + 1, total));
+  }
+  return out;
 }
 
 function download(blob: Blob, filename: string) {
@@ -178,6 +206,54 @@ function Cell({
   return <span className={value === null ? "text-slate-400" : ""}>{text}</span>;
 }
 
+function NumberedPages({
+  page,
+  pages,
+  hasNext,
+  onPage,
+}: {
+  page: number;
+  /** The last page, once the count is in. */
+  pages: number | undefined;
+  hasNext: boolean;
+  onPage: (page: number) => void;
+}) {
+  return (
+    <nav aria-label="Pagination" className="flex flex-wrap items-center justify-between gap-2 text-sm">
+      <span className="text-slate-500">
+        Page {page}
+        {pages !== undefined && ` of ${pages}`}
+      </span>
+      <div className="flex flex-wrap items-center gap-1">
+        <Button disabled={page <= 1} onClick={() => onPage(page - 1)}>
+          Previous
+        </Button>
+        {pages !== undefined &&
+          pageRange(page, pages).map((n, i) =>
+            n === GAP ? (
+              <span key={`gap-${i}`} className="px-1 text-slate-400">
+                {GAP}
+              </span>
+            ) : (
+              <Button
+                key={n}
+                variant={n === page ? "primary" : "secondary"}
+                aria-current={n === page ? "page" : undefined}
+                aria-label={`Page ${n}`}
+                onClick={() => onPage(n)}
+              >
+                {n}
+              </Button>
+            ),
+          )}
+        <Button disabled={!hasNext} onClick={() => onPage(page + 1)}>
+          Next
+        </Button>
+      </div>
+    </nav>
+  );
+}
+
 export function ModelList({ model, models }: { model: ModelMeta; models: ModelMeta[] }) {
   const [search, setSearch] = useSearchParams();
   const query = queryFromSearch(search);
@@ -212,7 +288,13 @@ export function ModelList({ model, models }: { model: ModelMeta; models: ModelMe
 
   /** Apply `changes`, back on the first page unless they name another. */
   const update = (changes: Partial<ListQuery>) => {
-    const next = listSearch({ ...query, after: undefined, before: undefined, ...changes });
+    const next = listSearch({
+      ...query,
+      page: undefined,
+      after: undefined,
+      before: undefined,
+      ...changes,
+    });
     setSearch(new URLSearchParams(next.slice(1)));
   };
 
@@ -261,6 +343,10 @@ export function ModelList({ model, models }: { model: ModelMeta; models: ModelMe
   const selectable = model.capabilities.delete || model.actions.length > 0;
   const page = list.data;
   const records = page?.records ?? [];
+  // Numbered pages count exactly, so the count gives the last page.
+  const total = count.data && !count.isPlaceholderData ? count.data.count : undefined;
+  const pages =
+    page && total?.kind === "exact" ? Math.max(1, Math.ceil(total.value / page.per_page)) : undefined;
   // While the next page or filter loads, the previous rows stay on screen;
   // they cannot be selected, and only rows on screen are ever acted on.
   const stale = list.isPlaceholderData;
@@ -475,7 +561,15 @@ export function ModelList({ model, models }: { model: ModelMeta; models: ModelMe
         </Card>
       )}
 
-      {page && (page.prev || page.next) && (
+      {page && page.page !== null && (page.prev || page.next) && (
+        <NumberedPages
+          page={page.page}
+          pages={pages}
+          hasNext={Boolean(page.next)}
+          onPage={(n) => update({ page: n })}
+        />
+      )}
+      {page && page.page === null && (page.prev || page.next) && (
         <nav aria-label="Pagination" className="flex justify-end gap-2 text-sm">
           <Button disabled={!page.prev} onClick={() => update({ before: page.prev ?? undefined })}>
             Previous

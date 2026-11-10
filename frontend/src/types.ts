@@ -65,6 +65,8 @@ export interface ModelMeta {
   list_filter: string[];
   ordering: { field: string; direction: "asc" | "desc" };
   per_page: number;
+  /** Numbered pages, or pages that start from the record before or after them. */
+  pagination: "pages" | "cursor";
   display_field: string | null;
   actions: { name: string; label: string }[];
   related: { model: string; field: string; label: string }[];
@@ -144,9 +146,11 @@ export interface Count {
 export interface Page {
   records: AdminRecord[];
   per_page: number;
-  /** The `after` cursor of the next page. */
+  /** The page's number, with numbered pages. */
+  page: number | null;
+  /** The next page's number, or with cursor pagination its `after` cursor. */
   next: string | null;
-  /** The `before` cursor of the previous page. */
+  /** The previous page's number, or with cursor pagination its `before` cursor. */
   prev: string | null;
   labels: Labels;
 }

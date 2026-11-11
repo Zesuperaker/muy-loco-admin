@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.3.0](https://github.com/Zesuperaker/muy-loco-admin/compare/v0.2.0...v0.3.0) (2026-11-11)
+
+
+### Features
+
+* **list:** add ModelAdmin::cursor_pagination() for large tables, which pages a list from the record before or after each page instead of OFFSET and stops its list and dashboard counts at 10,000 ([9dbd870](https://github.com/Zesuperaker/muy-loco-admin/commit/9dbd870829aa1770eabd0f1eacc7f56c94e086f7))
+
+
+### Performance Improvements
+
+* **list:** count a list once per search and filters instead of on every page ([9dbd870](https://github.com/Zesuperaker/muy-loco-admin/commit/9dbd870829aa1770eabd0f1eacc7f56c94e086f7))
+* **search:** match number, date, UUID and other typed search fields by value, so their indexes serve the search ([9dbd870](https://github.com/Zesuperaker/muy-loco-admin/commit/9dbd870829aa1770eabd0f1eacc7f56c94e086f7))
+* **search:** match text search fields with one ILIKE (Postgres) or LIKE (SQLite) that a trigram index can serve, instead of lower(cast(col AS text)) in up to four spellings ([9dbd870](https://github.com/Zesuperaker/muy-loco-admin/commit/9dbd870829aa1770eabd0f1eacc7f56c94e086f7))
+
 ## [0.2.0](https://github.com/Zesuperaker/muy-loco-admin/compare/v0.1.1...v0.2.0) (2026-11-09)
 
 

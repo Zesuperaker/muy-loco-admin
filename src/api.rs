@@ -29,7 +29,7 @@ use crate::{
     error::{AdminError, AdminResult},
     meta::{Capabilities, ModelMeta},
     query::{ListParams, MAX_PER_PAGE},
-    resource::{Choice, CsvStream, Page, Record, Resource},
+    resource::{Choice, Count, CsvStream, Page, Record, Resource},
     roles::{self, Access, Role, RoleInput},
     session,
 };
@@ -302,6 +302,7 @@ pub(crate) fn router() -> Router<AdminState> {
         .route("/schema", get(schema))
         .route("/stats", get(stats))
         .route("/models/{model}/records", get(list).post(create))
+        .route("/models/{model}/count", get(count))
         .route(
             "/models/{model}/records/{key}",
             get(show).patch(update).put(update).delete(destroy),
@@ -390,7 +391,14 @@ pub(crate) struct SchemaResponse<'a> {
 #[derive(Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct StatsResponse {
-    counts: BTreeMap<String, u64>,
+    counts: BTreeMap<String, Count>,
+}
+
+/// How many records match a list's search and filters.
+#[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct CountResponse {
+    count: Count,
 }
 
 /// Foreign-key field name, then the key value as text, to the label of the
@@ -517,6 +525,7 @@ async fn schema(State(state): State<AdminState>, Authed { access, .. }: Authed) 
     Json(SchemaResponse { models }).into_response()
 }
 
+/// How many records each model the user may view has, for the dashboard.
 async fn stats(
     State(state): State<AdminState>,
     Authed { access, .. }: Authed,
@@ -526,7 +535,10 @@ async fn stats(
         if !access.can_view(&model.meta) {
             continue;
         }
-        let count = model.resource.count(&state.0.ctx.db).await?;
+        let count = model
+            .resource
+            .count(&state.0.ctx.db, &ListParams::default())
+            .await?;
         counts.insert(model.meta.name.clone(), count);
     }
     Ok(Json(StatsResponse { counts }))
@@ -600,6 +612,20 @@ async fn list(
     let records: Vec<&Record> = page.records.iter().collect();
     let labels = fk_labels(&state, model, &access, &records).await?;
     Ok(Json(ListResponse { page, labels }))
+}
+
+/// How many records match a list's search and filters. Lists fetch this
+/// apart from their pages, so paging does not count the records again.
+async fn count(
+    State(state): State<AdminState>,
+    Authed { access, .. }: Authed,
+    Path(name): Path<String>,
+    Query(query): Query<HashMap<String, String>>,
+) -> AdminResult<Json<CountResponse>> {
+    let model = state.authorize(&access, &name, Operation::View)?;
+    let params = ListParams::from_query(&query)?;
+    let count = model.resource.count(&state.0.ctx.db, &params).await?;
+    Ok(Json(CountResponse { count }))
 }
 
 async fn record_response(

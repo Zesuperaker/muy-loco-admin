@@ -536,6 +536,29 @@ where
     E::find().count(db).await.expect("count")
 }
 
+/// An exact record count, as the API reports it.
+pub fn exact(n: u64) -> Value {
+    json!({"kind": "exact", "value": n})
+}
+
+/// Insert `n` posts by `user_id` in one statement, titled `Bulk 1` to `Bulk {n}`, featured
+/// when even.
+pub async fn insert_posts(db: &DatabaseConnection, user_id: i32, n: u64) {
+    let status = if is_postgres() {
+        "'draft'::post_status"
+    } else {
+        "'draft'"
+    };
+    db.execute_unprepared(&format!(
+        "INSERT INTO posts (title, body, status, featured, price, views, user_id, created_at, \
+         updated_at) WITH RECURSIVE seq(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM seq WHERE \
+         i < {n}) SELECT 'Bulk ' || i, 'body', {status}, i % 2 = 0, 1, i, {user_id}, \
+         CURRENT_TIMESTAMP, CURRENT_TIMESTAMP FROM seq"
+    ))
+    .await
+    .expect("insert posts");
+}
+
 /// A response from the admin router.
 pub struct Res {
     pub status: StatusCode,

@@ -20,7 +20,7 @@ function bodies(fetchMock: ReturnType<typeof mockFetch>["fetchMock"], method: st
 }
 
 function pageOf(records: unknown[], extra: Record<string, unknown> = {}) {
-  return { records, total: records.length, page: 1, per_page: 25, pages: 1, labels: {}, ...extra };
+  return { records, per_page: 25, page: 1, next: null, prev: null, labels: {}, ...extra };
 }
 
 /** A post as the server writes it, with `user_id` and `meta` as given (raw JSON). */
@@ -110,7 +110,9 @@ describe("list state", () => {
   it("leaving an unchanged text filter keeps the page", async () => {
     mockFetch(
       baseRoutes({
-        "GET /admin/api/models/posts/records": { body: pageOf([postRecord(1)], { page: 3, pages: 3, total: 60 }) },
+        "GET /admin/api/models/posts/records": {
+          body: pageOf([postRecord(1)], { page: 3, prev: "2" }),
+        },
       }),
     );
     const user = userEvent.setup();
@@ -124,6 +126,31 @@ describe("list state", () => {
     expect(currentLocation()).toBe("/models/posts?filter.views=5");
   });
 
+  it("hides the previous search's count until the new one arrives", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const { fetchMock } = mockFetch(
+      baseRoutes({
+        "GET /admin/api/models/posts/records": { body: pageOf([postRecord(1)]) },
+        "GET /admin/api/models/posts/count": (call) => ({
+          body: { count: { kind: "exact", value: call.url.includes("q=") ? 1 : 60 } },
+        }),
+      }),
+    );
+    const impl = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).includes("/count?q=")) await gate;
+      return impl(input, init);
+    });
+    const user = userEvent.setup();
+    renderApp("/admin/models/posts");
+    expect(await screen.findByText("60 total")).toBeInTheDocument();
+    await user.type(screen.getByLabelText("Search"), "rust{Enter}");
+    await waitFor(() => expect(screen.queryByText("60 total")).not.toBeInTheDocument());
+    release();
+    expect(await screen.findByText("1 total")).toBeInTheDocument();
+  });
+
   it("rows of the previous page cannot be selected while the next one loads", async () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => (release = resolve));
@@ -131,8 +158,8 @@ describe("list state", () => {
       baseRoutes({
         "GET /admin/api/models/posts/records": (call) =>
           call.url.includes("page=2")
-            ? { body: pageOf([postRecord(4), postRecord(5)], { page: 2, pages: 2, total: 4 }) }
-            : { body: pageOf([postRecord(1), postRecord(2)], { page: 1, pages: 2, total: 4 }) },
+            ? { body: pageOf([postRecord(4), postRecord(5)], { page: 2, prev: "1" }) }
+            : { body: pageOf([postRecord(1), postRecord(2)], { next: "2" }) },
         "POST /admin/api/models/posts/bulk-delete": { body: { deleted: 2 } },
       }),
     );

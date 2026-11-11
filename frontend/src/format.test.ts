@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  countNote,
+  formatCount,
   InputError,
   display,
   displayFull,
@@ -98,6 +100,18 @@ describe("display", () => {
     expect(keyText("a")).toBe("a");
     expect(keyText(5)).toBe("5");
     expect(keyText(true)).toBe("true");
+  });
+});
+
+describe("formatCount", () => {
+  it("formats exact, capped and estimated counts", () => {
+    expect(formatCount({ kind: "exact", value: 1234 })).toBe("1,234");
+    expect(countNote({ kind: "exact", value: 1234 })).toBeUndefined();
+    expect(formatCount({ kind: "more_than", value: 10000 })).toBe("10,000+");
+    expect(formatCount({ kind: "estimate", value: 1234567 })).toBe("~1.2M");
+    expect(countNote({ kind: "estimate", value: 1234567 })).toBe(
+      "Estimated from the database's statistics",
+    );
   });
 });
 

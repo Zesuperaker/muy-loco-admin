@@ -154,6 +154,19 @@ pub enum SortDirection {
     Desc,
 }
 
+/// How a list moves between pages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[serde(rename_all = "snake_case")]
+pub enum Pagination {
+    /// Numbered pages: the list counts its records, and a page skips the
+    /// records before it.
+    Pages,
+    /// Pages that start from the record before or after them, so a page
+    /// reads only its own records.
+    Cursor,
+}
+
 /// Default ordering of a list.
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
@@ -196,6 +209,7 @@ pub struct ModelMeta {
     pub list_filter: Vec<String>,
     pub ordering: Ordering,
     pub per_page: u64,
+    pub pagination: Pagination,
     pub display_field: Option<String>,
     pub actions: Vec<ActionMeta>,
     pub related: Vec<RelatedMeta>,

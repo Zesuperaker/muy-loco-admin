@@ -10,15 +10,15 @@ import {
   renderApp,
   usersModel,
 } from "../test/utils";
-import { queryFromSearch } from "./ModelList";
+import { pageRange, queryFromSearch } from "./ModelList";
 
 function page(records = [postRecord(2), postRecord(1, { featured: true, rating: 4.5 })], extra = {}) {
   return {
     records,
-    total: records.length,
-    page: 1,
     per_page: 25,
-    pages: 1,
+    page: 1,
+    next: null,
+    prev: null,
     labels: { user_id: { "1": "Ann" } },
     ...extra,
   };
@@ -29,13 +29,32 @@ describe("queryFromSearch", () => {
     expect(
       queryFromSearch(new URLSearchParams("page=3&sort=title&order=desc&q=x&filter.status=draft")),
     ).toEqual({ page: 3, sort: "title", order: "desc", q: "x", filters: { status: "draft" } });
-    expect(queryFromSearch(new URLSearchParams("page=abc&order=up"))).toEqual({
+    expect(queryFromSearch(new URLSearchParams("page=abc&after=3")).after).toBe("3");
+    expect(queryFromSearch(new URLSearchParams("after=3&before=4")).before).toBeUndefined();
+    expect(queryFromSearch(new URLSearchParams("before=4&order=up"))).toEqual({
       page: 1,
+      after: undefined,
+      before: "4",
       sort: undefined,
       order: undefined,
       q: undefined,
       filters: {},
     });
+  });
+});
+
+describe("pageRange", () => {
+  it("offers every page of a short list", () => {
+    expect(pageRange(1, 5)).toEqual([1, 2, 3, 4, 5]);
+    expect(pageRange(5, 7)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    expect(pageRange(9, 3)).toEqual([1, 2, 3]);
+  });
+
+  it("elides the pages far from the current one", () => {
+    expect(pageRange(1, 40)).toEqual([1, 2, 3, "…", 40]);
+    expect(pageRange(20, 40)).toEqual([1, "…", 18, 19, 20, 21, 22, "…", 40]);
+    expect(pageRange(40, 40)).toEqual([1, "…", 38, 39, 40]);
+    expect(pageRange(99, 40)).toEqual([1, "…", 38, 39, 40]);
   });
 });
 
@@ -113,7 +132,10 @@ describe("ModelList", () => {
   it("updates the URL when sorting, searching, filtering and paging", async () => {
     const { calls } = mockFetch(
       baseRoutes({
-        "GET /admin/api/models/posts/records": { body: page(undefined, { pages: 3, total: 60 }) },
+        "GET /admin/api/models/posts/records": {
+          body: page(undefined, { page: 2, next: "3", prev: "1" }),
+        },
+        "GET /admin/api/models/posts/count": { body: { count: { kind: "exact", value: 60 } } },
         "GET /admin/api/models/users/lookup": { body: { choices: [{ key: "1", value: 1, label: "Ann" }] } },
       }),
     );
@@ -143,8 +165,17 @@ describe("ModelList", () => {
     await user.click(await screen.findByRole("option", { name: /Ann/ }));
     expect(currentLocation()).toContain("filter.user_id=1");
 
+    expect(await screen.findByText("Page 2 of 3")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Page 2" })).toHaveAttribute("aria-current", "page");
     await user.click(screen.getByRole("button", { name: "Next" }));
-    expect(currentLocation()).toContain("page=2");
+    expect(currentLocation()).toMatch(/^\/models\/posts\?page=3&sort=title/);
+    await user.click(screen.getByRole("button", { name: "Previous" }));
+    expect(currentLocation()).toMatch(/^\/models\/posts\?sort=title/);
+    await user.click(screen.getByRole("button", { name: "Page 3" }));
+    expect(currentLocation()).toMatch(/^\/models\/posts\?page=3&sort=title/);
+    await user.type(screen.getByLabelText("Search"), "s{Enter}");
+    expect(currentLocation()).not.toContain("page=");
+    expect(calls.some((c) => c.url.includes("/count?q=rusts&filter."))).toBe(true);
 
     await user.click(screen.getByRole("button", { name: "Clear" }));
     expect(currentLocation()).toBe("/models/posts?sort=title&order=desc");
@@ -233,6 +264,45 @@ describe("ModelList", () => {
     await screen.findByRole("table");
     await user.click(screen.getByRole("button", { name: "Export CSV" }));
     expect(await screen.findByText("no export")).toBeInTheDocument();
+  });
+
+  it("pages a list with cursor pagination by Previous and Next", async () => {
+    mockFetch(
+      baseRoutes({
+        "GET /admin/api/schema": {
+          body: { models: [usersModel, { ...postsModel, pagination: "cursor" }] },
+        },
+        "GET /admin/api/models/posts/records": {
+          body: page(undefined, { page: null, next: "1", prev: "2" }),
+        },
+        "GET /admin/api/models/posts/count": {
+          body: { count: { kind: "more_than", value: 10000 } },
+        },
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp("/admin/models/posts?sort=title");
+    const total = await screen.findByText("10,000+ total");
+    expect(total).toHaveAttribute("title", "Counting stops at 10,000 records");
+    expect(screen.queryByText(/^Page /)).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Next" }));
+    expect(currentLocation()).toBe("/models/posts?after=1&sort=title");
+    await user.click(screen.getByRole("button", { name: "Previous" }));
+    expect(currentLocation()).toBe("/models/posts?before=2&sort=title");
+  });
+
+  it("numbers pages before the count arrives, without the last one", async () => {
+    mockFetch(
+      baseRoutes({
+        "GET /admin/api/models/posts/records": { body: page(undefined, { page: 1, next: "2" }) },
+        "GET /admin/api/models/posts/count": { status: 500, body: { error: "count broke" } },
+      }),
+    );
+    renderApp("/admin/models/posts");
+    expect(await screen.findByText("Page 1")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Previous" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Next" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Page 1" })).not.toBeInTheDocument();
   });
 
   it("handles empty lists, errors and read-only models", async () => {

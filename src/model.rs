@@ -46,6 +46,7 @@ pub struct ModelAdmin<E: EntityTrait> {
     pub(crate) show_fields: Vec<String>,
     pub(crate) ordering: Option<(String, SortDirection)>,
     pub(crate) per_page: Option<u64>,
+    pub(crate) cursor_pagination: bool,
     pub(crate) display_field: Option<String>,
     pub(crate) can_create: bool,
     pub(crate) can_update: bool,
@@ -81,6 +82,7 @@ impl<E: EntityTrait> ModelAdmin<E> {
             show_fields: Vec::new(),
             ordering: None,
             per_page: None,
+            cursor_pagination: false,
             display_field: None,
             can_create: true,
             can_update: true,
@@ -113,7 +115,10 @@ impl<E: EntityTrait> ModelAdmin<E> {
         self
     }
 
-    /// Columns matched by the search box (defaults to text columns).
+    /// Columns matched by the search box (defaults to text columns). Text
+    /// columns match when they contain the search, ignoring case; numbers,
+    /// dates, UUIDs and the like when they equal it. See
+    /// [Lists on large tables](crate#lists-on-large-tables).
     #[must_use]
     pub fn search_fields(mut self, fields: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.search_fields = Some(names(fields));
@@ -157,6 +162,17 @@ impl<E: EntityTrait> ModelAdmin<E> {
     #[must_use]
     pub fn ordering(mut self, field: impl Into<String>, direction: SortDirection) -> Self {
         self.ordering = Some((field.into(), direction));
+        self
+    }
+
+    /// Page the list from the record before or after each page, instead of by
+    /// number, so a page reads only its own records however large the table
+    /// is. The list then has Previous and Next without page numbers, and its
+    /// count, on the list and the dashboard, stops at 10,000. See
+    /// [Lists on large tables](crate#lists-on-large-tables).
+    #[must_use]
+    pub fn cursor_pagination(mut self) -> Self {
+        self.cursor_pagination = true;
         self
     }
 

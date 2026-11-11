@@ -331,7 +331,10 @@ async fn custom_auth() {
     );
 
     let stats = editor(Method::GET, "/api/stats".into()).await.json();
-    assert_eq!(stats["counts"], json!({"posts": 1, "users": 1}));
+    assert_eq!(
+        stats["counts"],
+        json!({"posts": common::exact(1), "users": common::exact(1)})
+    );
     let list = editor(Method::GET, "/api/models/posts/records".into())
         .await
         .json();

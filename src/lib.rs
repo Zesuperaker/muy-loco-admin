@@ -22,7 +22,8 @@
 //!
 //! # Features
 //!
-//! - Lists with pagination, sorting, search and filters
+//! - Lists with pagination, sorting, search and filters, which stay fast on
+//!   [large tables](#lists-on-large-tables)
 //! - Create, edit and delete, plus bulk delete and [custom actions](#custom-actions)
 //! - Writes go through `ActiveModel`, so model hooks and validation run as they do in app code
 //! - Foreign keys as links and searchable pickers, with links to related records
@@ -120,6 +121,7 @@
 //! | [`show_fields`](ModelAdmin::show_fields) | none; shows such a column anyway (e.g. `prompt_tokens`) |
 //! | [`ordering`](ModelAdmin::ordering) | primary key, descending |
 //! | [`per_page`](ModelAdmin::per_page) | 25, at most [`MAX_PER_PAGE`] (500) |
+//! | [`cursor_pagination`](ModelAdmin::cursor_pagination) | off: numbered pages; see [Lists on large tables](#lists-on-large-tables) |
 //! | [`display_field`](ModelAdmin::display_field) | first of `name`, `title`, `label`, `email`, `username`, `slug`, `code`; labels the record in links and pickers |
 //! | [`can_create`](ModelAdmin::can_create), [`can_update`](ModelAdmin::can_update), [`can_delete`](ModelAdmin::can_delete), [`can_export`](ModelAdmin::can_export) | `true` |
 //! | [`read_only`](ModelAdmin::read_only) | off; turns off create, update and delete |
@@ -366,6 +368,41 @@
 //!
 //! [`Admin::middlewares_from::<Self>()`](Admin::middlewares_from) uses the app's
 //! `Hooks::middlewares()`; without it, the stack configured under `server.middlewares` is used.
+//!
+//! # Lists on large tables
+//!
+//! Lists have numbered pages by default, like Django's admin. A list counts all the records
+//! that match its search and filters (once, not on every page), the dashboard counts all of
+//! the model's records, and a page skips the records of the pages before it, so all three take
+//! longer as a table grows. For a large table, switch the model to cursor pagination:
+//!
+//! ```rust,ignore
+//! .register(ModelAdmin::<events::Entity>::new().cursor_pagination())
+//! ```
+//!
+//! - **Pages** then start from the record before or after them, so the database reads each
+//!   page from an index instead of skipping every row before it. The list has Previous and
+//!   Next buttons rather than page numbers. The default ordering uses the primary key's index;
+//!   to sort a large list by another column, index it, ideally followed by the primary key
+//!   (`CREATE INDEX ... ON events (created_at, id)`).
+//! - **Counts**, on the list and the dashboard, stop at 10,000. A larger count shows as
+//!   "10,000+", or, for a whole table on Postgres, as the estimate `ANALYZE` keeps ("~1.2M").
+//!
+//! Whatever the pagination:
+//!
+//! - **Search** matches text fields that contain the search, ignoring case: `ILIKE` on
+//!   Postgres, `LIKE` on SQLite. Other search fields, such as numbers, dates and UUIDs, match
+//!   when the search is one of their values (`42` finds 42, not 142), so their indexes serve it;
+//!   JSON, binary and array fields match their text.
+//!
+//! On Postgres, a trigram index serves the text search, for example in a migration:
+//!
+//! ```sql
+//! CREATE EXTENSION IF NOT EXISTS pg_trgm;
+//! CREATE INDEX articles_title_trgm ON articles USING gin (title gin_trgm_ops);
+//! ```
+//!
+//! SQLite has no index for text that contains a search, so it reads the whole table.
 //!
 //! # Deploying to production
 //!

@@ -52,6 +52,16 @@ export type Capabilities = { view: boolean, create: boolean, update: boolean, de
 export type Choice = { key: string, value: JsonValue, label: string, };
 
 /**
+ * How many records a list has.
+ */
+export type Count = { "kind": "exact", "value": number } | { "kind": "more_than", "value": number } | { "kind": "estimate", "value": number };
+
+/**
+ * How many records match a list's search and filters.
+ */
+export type CountResponse = { count: Count, };
+
+/**
  * The signed-in user as the UI shows them.
  */
 export type CurrentUser = { id: string, name: string,
@@ -141,7 +151,21 @@ export type KeysBody = { keys: Array<string>, };
 /**
  * A page of records, with the labels of the records they point at.
  */
-export type ListResponse = { labels: { [key in string]: { [key in string]: string } }, records: Array<AdminRecord>, total: number, page: number, per_page: number, pages: number, };
+export type ListResponse = { labels: { [key in string]: { [key in string]: string } }, records: Array<AdminRecord>, per_page: number,
+/**
+ * The page's number, when the list has numbered pages.
+ */
+page: number | null,
+/**
+ * What fetches the next page, if there is one: its number, or with
+ * cursor pagination its `after` cursor.
+ */
+next: string | null,
+/**
+ * What fetches the previous page, if there is one: its number, or with
+ * cursor pagination its `before` cursor.
+ */
+prev: string | null, };
 
 /**
  * How the UI signs users in.
@@ -156,12 +180,17 @@ export type LookupResponse = { choices: Array<Choice>, };
 /**
  * Everything the UI needs to render a model.
  */
-export type ModelMeta = { name: string, label: string, table: string, primary_key: Array<string>, fields: Array<FieldMeta>, list_display: Array<string>, search_fields: Array<string>, list_filter: Array<string>, ordering: Ordering, per_page: number, display_field: string | null, actions: Array<ActionMeta>, related: Array<RelatedMeta>, capabilities: Capabilities, };
+export type ModelMeta = { name: string, label: string, table: string, primary_key: Array<string>, fields: Array<FieldMeta>, list_display: Array<string>, search_fields: Array<string>, list_filter: Array<string>, ordering: Ordering, per_page: number, pagination: Pagination, display_field: string | null, actions: Array<ActionMeta>, related: Array<RelatedMeta>, capabilities: Capabilities, };
 
 /**
  * Default ordering of a list.
  */
 export type Ordering = { field: string, direction: SortDirection, };
+
+/**
+ * How a list moves between pages.
+ */
+export type Pagination = "pages" | "cursor";
 
 /**
  * A record, with the labels of the records it points at.
@@ -232,4 +261,4 @@ export type SortDirection = "asc" | "desc";
 /**
  * Model name to its number of records, for the models the user may view.
  */
-export type StatsResponse = { counts: { [key in string]: number }, };
+export type StatsResponse = { counts: { [key in string]: Count }, };

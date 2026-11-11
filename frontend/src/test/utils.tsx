@@ -75,6 +75,7 @@ export const usersModel: ModelMeta = {
   list_filter: [],
   ordering: { field: "id", direction: "desc" },
   per_page: 25,
+  pagination: "pages",
   display_field: "name",
   actions: [],
   related: [{ model: "posts", field: "user_id", label: "Posts" }],
@@ -112,6 +113,7 @@ export const postsModel: ModelMeta = {
   list_filter: ["status", "featured", "user_id", "views"],
   ordering: { field: "id", direction: "desc" },
   per_page: 25,
+  pagination: "pages",
   display_field: "title",
   actions: [{ name: "publish", label: "Publish" }],
   related: [],
@@ -163,7 +165,11 @@ export function baseRoutes(extra: Record<string, Reply | Handler> = {}) {
     "GET /admin/api/config": { body: formConfig },
     "GET /admin/api/me": { body: { id: "1", name: "Ann" } },
     "GET /admin/api/schema": { body: { models: [usersModel, postsModel] } },
-    "GET /admin/api/stats": { body: { counts: { users: 2, posts: 5 } } },
+    "GET /admin/api/stats": {
+      body: { counts: { users: { kind: "exact", value: 2 }, posts: { kind: "exact", value: 5 } } },
+    },
+    "GET /admin/api/models/users/count": { body: { count: { kind: "exact", value: 2 } } },
+    "GET /admin/api/models/posts/count": { body: { count: { kind: "exact", value: 2 } } },
     ...extra,
   };
 }

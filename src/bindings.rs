@@ -62,6 +62,7 @@ fn generate() -> String {
     types.visit::<api::SchemaResponse<'static>>();
     types.visit::<api::StatsResponse>();
     types.visit::<api::ListResponse>();
+    types.visit::<api::CountResponse>();
     types.visit::<api::RecordResponse>();
     types.visit::<api::DeleteResponse>();
     types.visit::<api::ActionResponse>();

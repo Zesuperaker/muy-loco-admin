@@ -130,7 +130,7 @@ pub struct FieldMeta {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(test, ts(optional))]
     pub relation: Option<RelationMeta>,
-    /// Whether this is the users' role column (see [`crate::migrations::roles`]).
+    /// Whether this is the users' role column, whose values are picked from the roles.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     #[cfg_attr(test, ts(as = "Option<bool>", optional))]
     pub role: bool,

@@ -92,7 +92,7 @@ export type FieldMeta = { name: string, label: string, kind: FieldKind, nullable
  */
 timezone: boolean, max_length?: number, choices?: Array<string>, relation?: RelationMeta,
 /**
- * Whether this is the users' role column (see [`crate::migrations::roles`]).
+ * Whether this is the users' role column, whose values are picked from the roles.
  */
 role?: boolean, };
 
@@ -208,7 +208,11 @@ export type RoleResponse = { role: RoleWithUsers, };
 /**
  * A role and how many users have it.
  */
-export type RoleWithUsers = { users: number, id: number, name: string, permissions: { [key in string]: Grant }, };
+export type RoleWithUsers = {
+/**
+ * How many users have the role.
+ */
+users: number, id: number, name: string, permissions: { [key in string]: Grant }, };
 
 /**
  * All roles.

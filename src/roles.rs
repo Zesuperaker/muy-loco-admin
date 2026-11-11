@@ -183,7 +183,8 @@ impl Grant {
 /// Model name to what the role may do with it. Models not listed are hidden.
 pub(crate) type Permissions = BTreeMap<String, Grant>;
 
-/// A role and what it grants.
+/// A role and what it grants. The roles API sends all of it to the UI (see
+/// `api::RoleWithUsers`), so a field added here is sent too.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct Role {

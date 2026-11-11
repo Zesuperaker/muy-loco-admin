@@ -441,6 +441,7 @@ pub(crate) struct LookupResponse {
 pub(crate) struct RoleWithUsers {
     #[serde(flatten)]
     role: Role,
+    /// How many users have the role.
     users: u64,
 }
 

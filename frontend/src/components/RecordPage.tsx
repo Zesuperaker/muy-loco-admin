@@ -1,10 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useState } from "react";
 import { Link, useNavigate } from "react-router";
-import { ApiError, type RecordResponse, api } from "../api";
+import { ApiError, api } from "../api";
 import { InputError, displayFull, fromInput, keyText, toInput } from "../format";
 import { paths } from "../paths";
-import type { FieldMeta, JsonValue, ModelMeta } from "../types";
+import type { FieldMeta, JsonValue, ModelMeta, RecordResponse } from "../types";
 import { FieldInput } from "./FieldInput";
 import { Button, Card, ErrorBanner, Spinner, useToast } from "./ui";
 

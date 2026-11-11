@@ -168,7 +168,7 @@ impl<E: EntityTrait> ModelAdmin<E> {
     /// Page the list from the record before or after each page, instead of by
     /// number, so a page reads only its own records however large the table
     /// is. The list then has Previous and Next without page numbers, and its
-    /// count stops at 10,000. See
+    /// count, on the list and the dashboard, stops at 10,000. See
     /// [Lists on large tables](crate#lists-on-large-tables).
     #[must_use]
     pub fn cursor_pagination(mut self) -> Self {

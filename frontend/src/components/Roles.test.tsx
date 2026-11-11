@@ -3,17 +3,17 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { emptyGrant } from "../roles";
 import { baseRoutes, currentLocation, field, mockFetch, renderApp, usersModel } from "../test/utils";
-import type { ModelMeta, Role } from "../types";
+import type { ModelMeta, RoleWithUsers } from "../types";
 
 const manager = { id: "1", name: "Ann", role: null, can_manage_roles: true };
 
-const editor: Role = {
+const editor: RoleWithUsers = {
   id: 3,
   name: "Editor",
   permissions: { posts: { ...emptyGrant(), view: true, update: true } },
   users: 2,
 };
-const support: Role = { id: 4, name: "Support", permissions: {}, users: 0 };
+const support: RoleWithUsers = { id: 4, name: "Support", permissions: {}, users: 0 };
 
 const usersWithRoles: ModelMeta = {
   ...usersModel,

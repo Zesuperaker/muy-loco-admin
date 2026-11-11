@@ -372,9 +372,9 @@
 //! # Lists on large tables
 //!
 //! Lists have numbered pages by default, like Django's admin. A list counts all the records
-//! that match its search and filters (once, not on every page), and a page skips the records
-//! of the pages before it, so both take longer as a table grows. For a large table, switch the
-//! model to cursor pagination:
+//! that match its search and filters (once, not on every page), the dashboard counts all of
+//! the model's records, and a page skips the records of the pages before it, so all three take
+//! longer as a table grows. For a large table, switch the model to cursor pagination:
 //!
 //! ```rust,ignore
 //! .register(ModelAdmin::<events::Entity>::new().cursor_pagination())
@@ -385,11 +385,10 @@
 //!   Next buttons rather than page numbers. The default ordering uses the primary key's index;
 //!   to sort a large list by another column, index it, ideally followed by the primary key
 //!   (`CREATE INDEX ... ON events (created_at, id)`).
-//! - **Counts** stop at 10,000. A larger count shows as "10,000+", or, for a whole table on
-//!   Postgres, as the estimate `ANALYZE` keeps ("~1.2M").
+//! - **Counts**, on the list and the dashboard, stop at 10,000. A larger count shows as
+//!   "10,000+", or, for a whole table on Postgres, as the estimate `ANALYZE` keeps ("~1.2M").
 //!
-//! The dashboard's counts stop at 10,000 the same way for every model. Whatever the
-//! pagination:
+//! Whatever the pagination:
 //!
 //! - **Search** matches text fields that contain the search, ignoring case: `ILIKE` on
 //!   Postgres, `LIKE` on SQLite. Other search fields, such as numbers, dates and UUIDs, match
@@ -462,6 +461,8 @@ mod admin;
 mod api;
 mod assets;
 pub mod auth;
+#[cfg(test)]
+mod bindings;
 mod error;
 mod generate;
 mod meta;

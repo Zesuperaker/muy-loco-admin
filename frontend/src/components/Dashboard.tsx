@@ -6,6 +6,7 @@ import { paths } from "../paths";
 import type { ModelMeta } from "../types";
 import { Card, ErrorBanner } from "./ui";
 
+/** How many records each model the user may view has, linking to its list. */
 export function Dashboard({ models }: { models: ModelMeta[] }) {
   const stats = useQuery({ queryKey: ["stats"], queryFn: api.stats });
   return (

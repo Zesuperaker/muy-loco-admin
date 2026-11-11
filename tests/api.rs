@@ -1615,7 +1615,7 @@ async fn cursors_whose_records_are_gone_still_find_a_page() {
 }
 
 #[tokio::test]
-async fn counts_stop_at_the_limit() {
+async fn counts_are_exact_unless_cursor_pagination_caps_them() {
     let (db, ctx, client) = client().await;
     let ann = create_user(&db.db, "ann@example.com", true).await;
     if is_postgres() {
@@ -1630,6 +1630,12 @@ async fn counts_stop_at_the_limit() {
         client.get("/api/models/posts/count").await.json()["count"],
         exact(10_050),
         "numbered pages count every record"
+    );
+    let stats = client.get("/api/stats").await.json();
+    assert_eq!(
+        stats["counts"]["posts"],
+        exact(10_050),
+        "so does the dashboard"
     );
     let cursors = cursor_client(&ctx).await;
     let count = |query: &'static str| {
@@ -1650,18 +1656,15 @@ async fn counts_stop_at_the_limit() {
         exact(5_025),
         "counts below the limit are exact"
     );
-    let stats = client.get("/api/stats").await.json();
-    assert_eq!(
-        stats["counts"]["posts"], more,
-        "the dashboard stops counting for numbered pages too"
-    );
+    let stats = cursors.get("/api/stats").await.json();
+    assert_eq!(stats["counts"]["posts"], more, "and its dashboard count");
     assert_eq!(stats["counts"]["users"], exact(1));
 
     if is_postgres() {
         db.db.execute_unprepared("ANALYZE posts").await.unwrap();
         let estimate = json!({"kind": "estimate", "value": 10_050});
         assert_eq!(count("").await, estimate);
-        let stats = client.get("/api/stats").await.json();
+        let stats = cursors.get("/api/stats").await.json();
         assert_eq!(stats["counts"]["posts"], estimate);
         assert_eq!(count("?q=bulk").await, more, "no estimate for a search");
     }

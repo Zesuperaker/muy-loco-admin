@@ -1,17 +1,22 @@
 import { parseJson } from "./json";
 import type {
+  ActionResponse,
   AdminConfig,
-  AdminRecord,
-  AdminUser,
-  Choice,
-  Count,
+  CountResponse,
+  CurrentUser,
+  DeleteResponse,
+  ErrorBody,
   FormLogin,
   JsonValue,
-  Labels,
-  ModelMeta,
-  Page,
-  Permissions,
-  Role,
+  KeysBody,
+  ListResponse,
+  LookupResponse,
+  RecordResponse,
+  RoleInput,
+  RoleResponse,
+  RolesResponse,
+  SchemaResponse,
+  StatsResponse,
 } from "./types";
 
 const DEV_BASE = "/admin";
@@ -51,7 +56,7 @@ async function errorFrom(res: Response): Promise<ApiError> {
   let message = res.statusText || `request failed (${res.status})`;
   let fields: Record<string, string[]> = {};
   try {
-    const body = (await res.json()) as { error?: string; fields?: Record<string, string[]> };
+    const body = (await res.json()) as Partial<ErrorBody>;
     if (body.error) message = body.error;
     if (body.fields) fields = body.fields;
   } catch {
@@ -104,6 +109,7 @@ export interface ListQuery {
   filters?: Record<string, string>;
 }
 
+/** The query string for a list request, leaving out defaults and empty filters. */
 export function listSearch(query: ListQuery): string {
   const params = new URLSearchParams();
   if (query.page && query.page > 1) params.set("page", String(query.page));
@@ -120,39 +126,35 @@ export function listSearch(query: ListQuery): string {
   return text ? `?${text}` : "";
 }
 
-export interface RecordResponse {
-  record: AdminRecord;
-  labels: Labels;
-}
-
 export const api = {
   config: () => json<AdminConfig>("/config"),
-  me: () => json<AdminUser>("/me"),
-  schema: () => json<{ models: ModelMeta[] }>("/schema"),
-  stats: () => json<{ counts: Record<string, Count> }>("/stats"),
-  list: (name: string, query: ListQuery) => json<Page>(`${model(name)}/records${listSearch(query)}`),
+  me: () => json<CurrentUser>("/me"),
+  schema: () => json<SchemaResponse>("/schema"),
+  stats: () => json<StatsResponse>("/stats"),
+  list: (name: string, query: ListQuery) =>
+    json<ListResponse>(`${model(name)}/records${listSearch(query)}`),
   /** The records matching the list's search and filters. */
   count: (name: string, query: ListQuery) =>
-    json<{ count: Count }>(`${model(name)}/count${listSearch({ q: query.q, filters: query.filters })}`),
+    json<CountResponse>(`${model(name)}/count${listSearch({ q: query.q, filters: query.filters })}`),
   get: (name: string, key: string) => json<RecordResponse>(record(name, key)),
   create: (name: string, values: Record<string, JsonValue>) =>
     send<RecordResponse>("POST", `${model(name)}/records`, values),
   update: (name: string, key: string, values: Record<string, JsonValue>) =>
     send<RecordResponse>("PATCH", record(name, key), values),
   remove: (name: string, key: string) =>
-    json<{ deleted: number }>(record(name, key), { method: "DELETE" }),
+    json<DeleteResponse>(record(name, key), { method: "DELETE" }),
   bulkDelete: (name: string, keys: string[]) =>
-    send<{ deleted: number }>("POST", `${model(name)}/bulk-delete`, { keys }),
+    send<DeleteResponse>("POST", `${model(name)}/bulk-delete`, { keys } satisfies KeysBody),
   action: (name: string, action: string, keys: string[]) =>
-    send<{ message: string }>(
+    send<ActionResponse>(
       "POST",
       `${model(name)}/actions/${encodeURIComponent(action)}`,
-      { keys },
+      { keys } satisfies KeysBody,
     ),
   lookup: (name: string, q: string, column?: string) => {
     const params = new URLSearchParams({ q });
     if (column) params.set("column", column);
-    return json<{ choices: Choice[] }>(`${model(name)}/lookup?${params.toString()}`);
+    return json<LookupResponse>(`${model(name)}/lookup?${params.toString()}`);
   },
   exportCsv: async (name: string, query: ListQuery): Promise<Blob> => {
     const all = { ...query, page: undefined, after: undefined, before: undefined };
@@ -161,13 +163,11 @@ export const api = {
     });
     return res.blob();
   },
-  roles: () => json<{ roles: Role[] }>("/roles"),
-  role: (id: number) => json<{ role: Role }>(`/roles/${id}`),
-  createRole: (input: { name: string; permissions: Permissions }) =>
-    send<{ role: Role }>("POST", "/roles", input),
-  updateRole: (id: number, input: { name: string; permissions: Permissions }) =>
-    send<{ role: Role }>("PATCH", `/roles/${id}`, input),
-  deleteRole: (id: number) => json<{ deleted: number }>(`/roles/${id}`, { method: "DELETE" }),
+  roles: () => json<RolesResponse>("/roles"),
+  role: (id: number) => json<RoleResponse>(`/roles/${id}`),
+  createRole: (input: RoleInput) => send<RoleResponse>("POST", "/roles", input),
+  updateRole: (id: number, input: RoleInput) => send<RoleResponse>("PATCH", `/roles/${id}`, input),
+  deleteRole: (id: number) => json<DeleteResponse>(`/roles/${id}`, { method: "DELETE" }),
   /** End the session (the app's too). */
   signOut: async (): Promise<void> => {
     await request("/session", { method: "DELETE" });

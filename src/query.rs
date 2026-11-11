@@ -48,6 +48,8 @@ fn parse_u64(name: &str, raw: &str) -> AdminResult<u64> {
 }
 
 impl ListParams {
+    /// Parse a list's query string. Unknown parameters and empty values are
+    /// ignored; malformed numbers and orders, or both cursors, are refused.
     pub(crate) fn from_query(query: &HashMap<String, String>) -> AdminResult<Self> {
         let mut params = Self {
             page: 1,

@@ -5,6 +5,7 @@ use serde::Serialize;
 
 /// How a field is rendered and edited in the UI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum FieldKind {
     String,
@@ -95,6 +96,7 @@ pub fn humanize(name: &str) -> String {
 
 /// A foreign key from this field to another table.
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct RelationMeta {
     /// The referenced table.
     pub table: String,
@@ -106,6 +108,7 @@ pub struct RelationMeta {
 
 /// A field of a model as exposed to the UI.
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 #[allow(clippy::struct_excessive_bools)]
 pub struct FieldMeta {
     pub name: String,
@@ -119,18 +122,23 @@ pub struct FieldMeta {
     /// Whether a date-time carries a time zone.
     pub timezone: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional))]
     pub max_length: Option<u32>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(test, ts(as = "Option<Vec<String>>", optional))]
     pub choices: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional))]
     pub relation: Option<RelationMeta>,
-    /// Whether this is the users' role column (see [`crate::migrations::roles`]).
+    /// Whether this is the users' role column, whose values are picked from the roles.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
+    #[cfg_attr(test, ts(as = "Option<bool>", optional))]
     pub role: bool,
 }
 
 /// Another model whose foreign key points at this one.
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct RelatedMeta {
     pub model: String,
     pub field: String,
@@ -139,6 +147,7 @@ pub struct RelatedMeta {
 
 /// Sort direction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 #[serde(rename_all = "lowercase")]
 pub enum SortDirection {
     Asc,
@@ -147,6 +156,7 @@ pub enum SortDirection {
 
 /// How a list moves between pages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum Pagination {
     /// Numbered pages: the list counts its records, and a page skips the
@@ -159,6 +169,7 @@ pub enum Pagination {
 
 /// Default ordering of a list.
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct Ordering {
     pub field: String,
     pub direction: SortDirection,
@@ -166,6 +177,7 @@ pub struct Ordering {
 
 /// A custom bulk action.
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct ActionMeta {
     pub name: String,
     pub label: String,
@@ -173,6 +185,7 @@ pub struct ActionMeta {
 
 /// Operations a model supports. A user with a role may do only part of them.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 #[allow(clippy::struct_excessive_bools)]
 pub struct Capabilities {
     pub view: bool,
@@ -184,6 +197,7 @@ pub struct Capabilities {
 
 /// Everything the UI needs to render a model.
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct ModelMeta {
     pub name: String,
     pub label: String,

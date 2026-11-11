@@ -14,6 +14,7 @@ const NULL_FILTER = "__null__";
 /** Clicks on these keep their own behavior instead of opening the row's record. */
 const INTERACTIVE = "a, button, input, select, textarea, [data-select]";
 
+/** The list state in the URL's query string; a bad page number means the first page. */
 export function queryFromSearch(search: URLSearchParams): ListQuery {
   const filters: Record<string, string> = {};
   for (const [key, value] of search) {
@@ -206,6 +207,7 @@ function Cell({
   return <span className={value === null ? "text-slate-400" : ""}>{text}</span>;
 }
 
+/** "Page 3 of 12", Previous and Next, and links to the pages around the current one. */
 function NumberedPages({
   page,
   pages,
@@ -254,6 +256,7 @@ function NumberedPages({
   );
 }
 
+/** A model's records, a page at a time, with search, filters, sorting and bulk actions. */
 export function ModelList({ model, models }: { model: ModelMeta; models: ModelMeta[] }) {
   const [search, setSearch] = useSearchParams();
   const query = queryFromSearch(search);

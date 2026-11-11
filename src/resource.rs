@@ -37,7 +37,8 @@ use crate::{
 
 const DEFAULT_PER_PAGE: u64 = 25;
 const EXPORT_BATCH: u64 = 500;
-/// Counting stops after this many records, so a count never reads more.
+/// With cursor pagination, counting stops after this many records, so a count
+/// never reads more.
 pub(crate) const COUNT_LIMIT: u64 = 10_000;
 const SENSITIVE: &[&str] = &["password", "secret", "token", "api_key", "salt"];
 /// Loco's timestamp columns: read-only by default and listed after the other fields.
@@ -48,6 +49,8 @@ const DISPLAY_CANDIDATES: &[&str] = &[
 
 /// One record as sent to the UI.
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(rename = "AdminRecord"))]
 pub struct Record {
     /// Encoded primary key, used in URLs.
     pub key: String,
@@ -59,6 +62,7 @@ pub struct Record {
 
 /// One page of a list.
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 #[allow(clippy::struct_field_names)]
 pub struct Page {
     pub records: Vec<Record>,
@@ -75,6 +79,7 @@ pub struct Page {
 
 /// How many records a list has.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum Count {
     /// Exactly this many.
@@ -87,6 +92,7 @@ pub enum Count {
 
 /// An option offered by a foreign-key picker.
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct Choice {
     pub key: String,
     pub value: Json,
@@ -100,12 +106,11 @@ pub(crate) type CsvStream = BoxStream<'static, AdminResult<Bytes>>;
 #[async_trait]
 pub(crate) trait Resource: Send + Sync {
     fn meta(&self) -> &ModelMeta;
-    /// The records matching `params`' search and filters: exact for numbered
-    /// pages, which need the total, and up to [`COUNT_LIMIT`] with cursor
-    /// pagination.
+    /// The records matching `params`' search and filters: exact, or up to
+    /// [`COUNT_LIMIT`] for a model with cursor pagination.
     async fn count(&self, db: &DatabaseConnection, params: &ListParams) -> AdminResult<Count>;
-    /// The model's records, up to [`COUNT_LIMIT`], for the dashboard.
-    async fn size(&self, db: &DatabaseConnection) -> AdminResult<Count>;
+    /// A page of the records matching `params`: page `params.page`, or with
+    /// cursor pagination the page next to `params.cursor`.
     async fn list(&self, db: &DatabaseConnection, params: &ListParams) -> AdminResult<Page>;
     async fn get(&self, db: &DatabaseConnection, key: &str) -> AdminResult<Record>;
     /// Insert a record from `input`. Fields in `locked` are read-only, like
@@ -134,6 +139,9 @@ pub(crate) trait Resource: Send + Sync {
         params: &ListParams,
         idle_limit: Duration,
     ) -> AdminResult<CsvStream>;
+    /// Up to `limit` choices for a foreign-key picker: records whose search
+    /// fields match `q`, or whose `column` (the key by default) starts with
+    /// it or, if it is not text, equals it.
     async fn lookup(
         &self,
         db: &DatabaseConnection,
@@ -361,6 +369,7 @@ impl<E: EntityTrait> Sort<E> {
         }
     }
 
+    /// The direction of this order.
     fn order(&self) -> Order {
         if self.asc { Order::Asc } else { Order::Desc }
     }
@@ -812,6 +821,8 @@ where
             .filter(|value| !is_null(value))
     }
 
+    /// The order `params` asks for: its `sort` column (ascending unless
+    /// `order` says otherwise), or the model's default ordering.
     fn sort(&self, params: &ListParams) -> AdminResult<Sort<E>> {
         let (col, default_dir) = match &params.sort {
             Some(field) => (self.column(field)?.col, SortDirection::Asc),
@@ -836,6 +847,8 @@ where
             .filter(|pk| pk.as_str() != sort.col.as_str())
     }
 
+    /// `select` in `sort` order, with the rest of the key breaking ties so the
+    /// order is the same on every request.
     fn ordered(&self, select: Select<E>, sort: &Sort<E>) -> Select<E> {
         let mut select = select.order_by(sort.expr(), sort.order());
         for pk in self.tiebreak(sort) {
@@ -942,6 +955,9 @@ where
         Ok(models)
     }
 
+    /// A page of `models` with cursor pagination: its first record is the
+    /// cursor to the previous page if `prev`, and its last to the next if
+    /// `next`.
     fn page(&self, models: &[E::Model], per_page: u64, prev: bool, next: bool) -> Page {
         let records: Vec<Record> = models.iter().map(|m| self.record(m)).collect();
         Page {
@@ -1023,6 +1039,7 @@ where
         Ok(Count::MoreThan(limit))
     }
 
+    /// The first page of `query` in `sort` order, with cursor pagination.
     async fn first_page(
         &self,
         db: &DatabaseConnection,
@@ -1177,16 +1194,15 @@ where
         &self.meta
     }
 
+    /// Counts every record, unless the model has cursor pagination, which
+    /// stops counting at [`COUNT_LIMIT`].
     async fn count(&self, db: &DatabaseConnection, params: &ListParams) -> AdminResult<Count> {
         let limit = (self.meta.pagination == Pagination::Cursor).then_some(COUNT_LIMIT);
         self.count_up_to(db, params, limit).await
     }
 
-    async fn size(&self, db: &DatabaseConnection) -> AdminResult<Count> {
-        self.count_up_to(db, &ListParams::default(), Some(COUNT_LIMIT))
-            .await
-    }
-
+    /// Numbered pages skip the pages before them; cursor pagination starts
+    /// from the cursor's record, and starts over if it is gone.
     async fn list(&self, db: &DatabaseConnection, params: &ListParams) -> AdminResult<Page> {
         let per_page = params.per_page.unwrap_or(self.meta.per_page);
         let sort = self.sort(params)?;

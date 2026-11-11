@@ -14,7 +14,7 @@ import {
   toggleOperation,
   userWarnings,
 } from "../roles";
-import type { ModelMeta, Permissions, Role } from "../types";
+import type { ModelMeta, Permissions, RoleWithUsers } from "../types";
 import { Button, Card, ErrorBanner, Spinner, useToast } from "./ui";
 
 const linkButton =
@@ -153,7 +153,7 @@ function PermissionTable({
   );
 }
 
-function RoleForm({ models, role }: { models: ModelMeta[]; role?: Role }) {
+function RoleForm({ models, role }: { models: ModelMeta[]; role?: RoleWithUsers }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { notify } = useToast();

@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { Link, NavLink } from "react-router";
 import { paths } from "../paths";
-import type { AdminUser, ModelMeta } from "../types";
+import type { CurrentUser, ModelMeta } from "../types";
 import { Button } from "./ui";
 
 function navClass({ isActive }: { isActive: boolean }): string {
@@ -20,7 +20,7 @@ export function Layout({
 }: {
   title: string;
   siteUrl: string | null;
-  user: AdminUser;
+  user: CurrentUser;
   models: ModelMeta[];
   onSignOut: () => void;
   children: ReactNode;

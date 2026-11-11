@@ -7,6 +7,7 @@
 | `src/` | the crate; the guide published on docs.rs is the crate docs in `src/lib.rs` |
 | `tests/` | crate integration tests; `tests/common` holds test entities and the HTTP client |
 | `frontend/` | the UI (React, Vite); `frontend/dist` is embedded at build time and committed |
+| `frontend/src/bindings.ts` | the API's TypeScript types, generated from the crate's Rust types by `src/bindings.rs` |
 | `dogfood/` | a Loco app using the crate, run with Docker |
 | `dogfood/e2e/` | Playwright tests against the dogfood app |
 | `docs/screenshots/` | the screenshots in the README and on docs.rs, taken from the dogfood app |
@@ -37,6 +38,11 @@ until curl -fs http://localhost:5150/_ping >/dev/null; do sleep 2; done
 ```
 
 CI keeps line coverage at or above 90% for the crate and 85% for the frontend.
+
+The UI's types for API requests and responses come from the Rust types that define them, never
+written by hand: derive `ts_rs::TS` on them in test builds, and list new top-level request or
+response bodies in `src/bindings.rs`. `cargo test` regenerates `frontend/src/bindings.ts`
+when it is out of date and fails once; commit the file.
 
 ## The dogfood app
 

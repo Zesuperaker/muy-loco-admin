@@ -10,7 +10,7 @@ import { RecordPage } from "./components/RecordPage";
 import { RoleList, RolePage } from "./components/Roles";
 import { ErrorBanner, Spinner, useToast } from "./components/ui";
 import { paths } from "./paths";
-import type { AdminConfig, AdminUser, ModelMeta } from "./types";
+import type { AdminConfig, CurrentUser, ModelMeta } from "./types";
 import { UserContext } from "./user";
 
 function NotFound() {
@@ -87,7 +87,7 @@ function Shell({
   onSignOut,
 }: {
   config: AdminConfig;
-  user: AdminUser;
+  user: CurrentUser;
   onSignOut: () => void;
 }) {
   const schema = useQuery({ queryKey: ["schema"], queryFn: api.schema });

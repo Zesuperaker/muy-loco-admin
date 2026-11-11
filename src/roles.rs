@@ -156,6 +156,7 @@ pub(crate) mod entity {
 
 /// What a role may do with one model. Any other permission implies `view`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 #[serde(default, deny_unknown_fields)]
 #[allow(clippy::struct_excessive_bools)]
 pub(crate) struct Grant {
@@ -182,8 +183,9 @@ impl Grant {
 /// Model name to what the role may do with it. Models not listed are hidden.
 pub(crate) type Permissions = BTreeMap<String, Grant>;
 
-/// A role as sent to the UI.
+/// A role and what it grants.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct Role {
     pub id: i64,
     pub name: String,
@@ -257,9 +259,12 @@ impl Access {
 
 /// A role as submitted by the UI. Fields left out are kept on update.
 #[derive(Debug, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RoleInput {
+    #[cfg_attr(test, ts(optional))]
     pub name: Option<String>,
+    #[cfg_attr(test, ts(optional))]
     pub permissions: Option<Permissions>,
 }
 

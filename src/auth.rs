@@ -82,6 +82,7 @@ impl From<AuthError> for AdminError {
 /// A login form that posts JSON credentials to an endpoint and reads a bearer
 /// token from the JSON response.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct FormLogin {
     /// URL the credentials are posted to.
     pub endpoint: String,
@@ -110,6 +111,7 @@ impl Default for FormLogin {
 
 /// How the UI signs users in.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum LoginMethod {
     /// Show a login form. The UI sends the token it gets back to the admin

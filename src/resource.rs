@@ -46,6 +46,8 @@ const DISPLAY_CANDIDATES: &[&str] = &[
 
 /// One record as sent to the UI.
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(rename = "AdminRecord"))]
 pub struct Record {
     /// Encoded primary key, used in URLs.
     pub key: String,
@@ -57,6 +59,7 @@ pub struct Record {
 
 /// One page of a list.
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 #[allow(clippy::struct_field_names)]
 pub struct Page {
     pub records: Vec<Record>,
@@ -68,6 +71,7 @@ pub struct Page {
 
 /// An option offered by a foreign-key picker.
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub struct Choice {
     pub key: String,
     pub value: Json,

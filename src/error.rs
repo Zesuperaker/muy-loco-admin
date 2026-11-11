@@ -8,8 +8,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use sea_orm::{DbErr, SqlErr};
-use serde::Deserialize;
-use serde_json::json;
+use serde::{Deserialize, Serialize};
 
 /// Field name to error messages.
 pub type FieldErrors = BTreeMap<String, Vec<String>>;
@@ -83,18 +82,29 @@ impl AdminError {
     }
 }
 
+/// The body of an error response.
+#[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct ErrorBody {
+    error: String,
+    /// The submitted fields that were rejected, each with why.
+    #[serde(skip_serializing_if = "FieldErrors::is_empty")]
+    #[cfg_attr(test, ts(as = "Option<FieldErrors>", optional))]
+    fields: FieldErrors,
+}
+
 impl IntoResponse for AdminError {
     fn into_response(self) -> Response {
         if let Self::Internal(msg) = &self {
             tracing::error!(error = %msg, "admin request failed");
         }
-        let mut body = json!({ "error": self.message() });
-        if let Self::Validation { fields, .. } = &self
-            && !fields.is_empty()
-        {
-            body["fields"] = json!(fields);
-        }
-        (self.status(), Json(body)).into_response()
+        let status = self.status();
+        let error = self.message();
+        let fields = match self {
+            Self::Validation { fields, .. } => fields,
+            _ => FieldErrors::new(),
+        };
+        (status, Json(ErrorBody { error, fields })).into_response()
     }
 }
 

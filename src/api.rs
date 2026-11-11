@@ -21,15 +21,15 @@ use axum::{
 };
 use futures_util::{StreamExt, stream};
 use loco_rs::{app::AppContext, auth::session::Session};
-use serde::Deserialize;
-use serde_json::{Map, Value as JsonValue, json};
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value as JsonValue};
 
 use crate::{
     auth::{AdminAuth, AdminUser, LoginMethod, UserRoles},
     error::{AdminError, AdminResult},
     meta::{Capabilities, ModelMeta},
     query::{ListParams, MAX_PER_PAGE},
-    resource::{CsvStream, Record, Resource},
+    resource::{Choice, CsvStream, Page, Record, Resource},
     roles::{self, Access, Role, RoleInput},
     session,
 };
@@ -273,7 +273,9 @@ fn body(
     input.map(|Json(map)| map).map_err(|e| rejection(&e))
 }
 
+/// The records a bulk delete or custom action applies to.
 #[derive(Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
 pub(crate) struct KeysBody {
     keys: Vec<String>,
 }
@@ -321,35 +323,159 @@ pub(crate) fn router() -> Router<AdminState> {
         .layer(from_fn(guard))
 }
 
+// Response bodies. `src/bindings.rs` generates their TypeScript types, and
+// those of the request bodies, for the UI.
+
 /// Title shown in the UI. It is fixed, like the `<title>` in `frontend/index.html`.
 const TITLE: &str = "Muy Loco Admin";
 
-async fn config(State(state): State<AdminState>) -> Json<JsonValue> {
-    Json(json!({
-        "title": TITLE,
-        "base_path": state.0.base_path,
-        "site_url": state.0.site_url,
-        "login": state.0.auth.login(),
-    }))
+/// What the UI needs before anyone signs in.
+#[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct AdminConfig {
+    title: &'static str,
+    /// The admin's mount path.
+    base_path: String,
+    /// Target of the "Visit site" link; `null` hides it.
+    site_url: Option<String>,
+    login: LoginMethod,
 }
 
-/// The user as the UI shows them: their role, and whether they may manage
-/// roles.
-fn user_json(state: &AdminState, authed: &Authed) -> JsonValue {
-    let role = match &authed.access {
-        Access::Full => JsonValue::Null,
-        Access::Role(role) => json!({ "id": role.id, "name": role.name }),
-    };
-    json!({
-        "id": authed.user.id,
-        "name": authed.user.name,
-        "role": role,
-        "can_manage_roles": state.0.roles.is_some() && authed.access.is_full(),
+/// The signed-in user as the UI shows them.
+#[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct CurrentUser {
+    id: String,
+    name: String,
+    /// The user's role; `null` for full access.
+    role: Option<RoleRef>,
+    /// Roles are on and the user has full access.
+    can_manage_roles: bool,
+}
+
+impl CurrentUser {
+    fn new(state: &AdminState, authed: &Authed) -> Self {
+        let role = match &authed.access {
+            Access::Full => None,
+            Access::Role(role) => Some(RoleRef {
+                id: role.id,
+                name: role.name.clone(),
+            }),
+        };
+        Self {
+            id: authed.user.id.clone(),
+            name: authed.user.name.clone(),
+            role,
+            can_manage_roles: state.0.roles.is_some() && authed.access.is_full(),
+        }
+    }
+}
+
+/// A role by id and name.
+#[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct RoleRef {
+    id: i64,
+    name: String,
+}
+
+/// The models the user may view.
+#[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct SchemaResponse<'a> {
+    models: Vec<Cow<'a, ModelMeta>>,
+}
+
+/// Model name to its number of records, for the models the user may view.
+#[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct StatsResponse {
+    counts: BTreeMap<String, u64>,
+}
+
+/// Foreign-key field name, then the key value as text, to the label of the
+/// record it points at.
+type Labels = BTreeMap<String, BTreeMap<String, String>>;
+
+/// A page of records, with the labels of the records they point at.
+#[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct ListResponse {
+    #[serde(flatten)]
+    page: Page,
+    labels: Labels,
+}
+
+/// A record, with the labels of the records it points at.
+#[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct RecordResponse {
+    record: Record,
+    labels: Labels,
+}
+
+/// How many records were deleted.
+#[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct DeleteResponse {
+    deleted: u64,
+}
+
+/// What a custom action reported.
+#[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct ActionResponse {
+    message: String,
+}
+
+/// Options for a foreign-key picker.
+#[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct LookupResponse {
+    choices: Vec<Choice>,
+}
+
+/// A role and how many users have it.
+#[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct RoleWithUsers {
+    #[serde(flatten)]
+    role: Role,
+    users: u64,
+}
+
+impl RoleWithUsers {
+    fn new(role: Role, users: &BTreeMap<i64, u64>) -> Self {
+        let users = users.get(&role.id).copied().unwrap_or(0);
+        Self { role, users }
+    }
+}
+
+/// All roles.
+#[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct RolesResponse {
+    roles: Vec<RoleWithUsers>,
+}
+
+/// One role.
+#[derive(Serialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+pub(crate) struct RoleResponse {
+    role: RoleWithUsers,
+}
+
+async fn config(State(state): State<AdminState>) -> Json<AdminConfig> {
+    Json(AdminConfig {
+        title: TITLE,
+        base_path: state.0.base_path.clone(),
+        site_url: state.0.site_url.clone(),
+        login: state.0.auth.login(),
     })
 }
 
-async fn me(State(state): State<AdminState>, authed: Authed) -> Json<JsonValue> {
-    Json(user_json(&state, &authed))
+async fn me(State(state): State<AdminState>, authed: Authed) -> Json<CurrentUser> {
+    Json(CurrentUser::new(&state, &authed))
 }
 
 /// Start a session for the user the request authenticates as: the login form
@@ -368,7 +494,7 @@ async fn sign_in(
     let session = session.ok_or_else(|| AdminError::Internal("sessions unavailable".into()))?;
     // A fresh session, so one planted before sign-in is worth nothing.
     let session = session.renew().set_user_id(authed.user.id.clone());
-    Ok((session, Json(user_json(&state, &authed))).into_response())
+    Ok((session, Json(CurrentUser::new(&state, &authed))).into_response())
 }
 
 /// End the request's session. It is the app's session too, so this signs the
@@ -380,20 +506,20 @@ async fn sign_out(LocoSession(session): LocoSession) -> Response {
     }
 }
 
-async fn schema(State(state): State<AdminState>, Authed { access, .. }: Authed) -> Json<JsonValue> {
-    let models: Vec<Cow<'_, ModelMeta>> = state
+async fn schema(State(state): State<AdminState>, Authed { access, .. }: Authed) -> Response {
+    let models = state
         .0
         .models
         .iter()
         .filter_map(|m| state.visible(m, &access))
         .collect();
-    Json(json!({ "models": models }))
+    Json(SchemaResponse { models }).into_response()
 }
 
 async fn stats(
     State(state): State<AdminState>,
     Authed { access, .. }: Authed,
-) -> AdminResult<Json<JsonValue>> {
+) -> AdminResult<Json<StatsResponse>> {
     let mut counts = BTreeMap::new();
     for model in &state.0.models {
         if !access.can_view(&model.meta) {
@@ -402,18 +528,17 @@ async fn stats(
         let count = model.resource.count(&state.0.ctx.db).await?;
         counts.insert(model.meta.name.clone(), count);
     }
-    Ok(Json(json!({ "counts": counts })))
+    Ok(Json(StatsResponse { counts }))
 }
 
-/// Labels of the records that foreign keys in `records` point at, keyed by
-/// field name, then by the foreign-key value as text: role names for the
-/// role column, and labels from the models the user may view.
+/// Labels of the records that foreign keys in `records` point at: role names
+/// for the role column, and labels from the models the user may view.
 async fn fk_labels(
     state: &AdminState,
     model: &Model,
     access: &Access,
     records: &[&Record],
-) -> AdminResult<BTreeMap<String, BTreeMap<String, String>>> {
+) -> AdminResult<Labels> {
     let mut out = BTreeMap::new();
     for field in &model.meta.fields {
         let values = || {
@@ -467,35 +592,33 @@ async fn list(
     Authed { access, .. }: Authed,
     Path(name): Path<String>,
     Query(query): Query<HashMap<String, String>>,
-) -> AdminResult<Json<JsonValue>> {
+) -> AdminResult<Json<ListResponse>> {
     let model = state.authorize(&access, &name, Operation::View)?;
     let params = ListParams::from_query(&query)?;
     let page = model.resource.list(&state.0.ctx.db, &params).await?;
     let records: Vec<&Record> = page.records.iter().collect();
     let labels = fk_labels(&state, model, &access, &records).await?;
-    let mut out = serde_json::to_value(&page).map_err(|e| AdminError::Internal(e.to_string()))?;
-    out["labels"] = json!(labels);
-    Ok(Json(out))
+    Ok(Json(ListResponse { page, labels }))
 }
 
 async fn record_response(
     state: &AdminState,
     model: &Model,
     access: &Access,
-    record: &Record,
-) -> AdminResult<Json<JsonValue>> {
-    let labels = fk_labels(state, model, access, &[record]).await?;
-    Ok(Json(json!({ "record": record, "labels": labels })))
+    record: Record,
+) -> AdminResult<Json<RecordResponse>> {
+    let labels = fk_labels(state, model, access, &[&record]).await?;
+    Ok(Json(RecordResponse { record, labels }))
 }
 
 async fn show(
     State(state): State<AdminState>,
     Authed { access, .. }: Authed,
     Path((name, key)): Path<(String, String)>,
-) -> AdminResult<Json<JsonValue>> {
+) -> AdminResult<Json<RecordResponse>> {
     let model = state.authorize(&access, &name, Operation::View)?;
     let record = model.resource.get(&state.0.ctx.db, &key).await?;
-    record_response(&state, model, &access, &record).await
+    record_response(&state, model, &access, record).await
 }
 
 async fn create(
@@ -511,7 +634,7 @@ async fn create(
         .resource
         .create(&state.0.ctx.db, input, &locked)
         .await?;
-    let json = record_response(&state, model, &access, &record).await?;
+    let json = record_response(&state, model, &access, record).await?;
     Ok((StatusCode::CREATED, json).into_response())
 }
 
@@ -520,7 +643,7 @@ async fn update(
     Authed { access, .. }: Authed,
     Path((name, key)): Path<(String, String)>,
     input: Result<Json<Map<String, JsonValue>>, JsonRejection>,
-) -> AdminResult<Json<JsonValue>> {
+) -> AdminResult<Json<RecordResponse>> {
     let model = state.authorize(&access, &name, Operation::Update)?;
     let input = body(input)?;
     let locked = state.locked(model, &access);
@@ -528,17 +651,17 @@ async fn update(
         .resource
         .update(&state.0.ctx.db, &key, input, &locked)
         .await?;
-    record_response(&state, model, &access, &record).await
+    record_response(&state, model, &access, record).await
 }
 
 async fn destroy(
     State(state): State<AdminState>,
     Authed { access, .. }: Authed,
     Path((name, key)): Path<(String, String)>,
-) -> AdminResult<Json<JsonValue>> {
+) -> AdminResult<Json<DeleteResponse>> {
     let model = state.authorize(&access, &name, Operation::Delete)?;
     let deleted = model.resource.delete(&state.0.ctx.db, &[key]).await?;
-    Ok(Json(json!({ "deleted": deleted })))
+    Ok(Json(DeleteResponse { deleted }))
 }
 
 async fn bulk_delete(
@@ -546,13 +669,13 @@ async fn bulk_delete(
     Authed { access, .. }: Authed,
     Path(name): Path<String>,
     input: Result<Json<KeysBody>, JsonRejection>,
-) -> AdminResult<Json<JsonValue>> {
+) -> AdminResult<Json<DeleteResponse>> {
     let model = state.authorize(&access, &name, Operation::Delete)?;
     let deleted = model
         .resource
         .delete(&state.0.ctx.db, &keys(input)?)
         .await?;
-    Ok(Json(json!({ "deleted": deleted })))
+    Ok(Json(DeleteResponse { deleted }))
 }
 
 async fn run_action(
@@ -560,13 +683,13 @@ async fn run_action(
     Authed { access, .. }: Authed,
     Path((name, action)): Path<(String, String)>,
     input: Result<Json<KeysBody>, JsonRejection>,
-) -> AdminResult<Json<JsonValue>> {
+) -> AdminResult<Json<ActionResponse>> {
     let model = state.authorize(&access, &name, Operation::Action(&action))?;
     let message = model
         .resource
         .run_action(&state.0.ctx, &action, &keys(input)?)
         .await?;
-    Ok(Json(json!({ "message": message })))
+    Ok(Json(ActionResponse { message }))
 }
 
 async fn export(
@@ -658,7 +781,7 @@ async fn lookup(
     Authed { access, .. }: Authed,
     Path(name): Path<String>,
     Query(query): Query<LookupQuery>,
-) -> AdminResult<Json<JsonValue>> {
+) -> AdminResult<Json<LookupResponse>> {
     let model = state.authorize(&access, &name, Operation::View)?;
     let limit = query
         .limit
@@ -673,16 +796,7 @@ async fn lookup(
             limit,
         )
         .await?;
-    Ok(Json(json!({ "choices": choices })))
-}
-
-fn role_json(role: &Role, users: u64) -> JsonValue {
-    json!({
-        "id": role.id,
-        "name": role.name,
-        "permissions": role.permissions,
-        "users": users,
-    })
+    Ok(Json(LookupResponse { choices }))
 }
 
 /// A role id from the URL; anything else names no role.
@@ -697,31 +811,31 @@ fn role_input(input: Result<Json<RoleInput>, JsonRejection>) -> AdminResult<Role
 async fn list_roles(
     State(state): State<AdminState>,
     Authed { access, .. }: Authed,
-) -> AdminResult<Json<JsonValue>> {
+) -> AdminResult<Json<RolesResponse>> {
     let users = state.role_admin(&access)?;
     let db = &state.0.ctx.db;
     let counts = roles::assigned(db, users, None).await?;
-    let list: Vec<JsonValue> = roles::all(db)
+    let roles = roles::all(db)
         .await?
-        .iter()
-        .map(|role| role_json(role, counts.get(&role.id).copied().unwrap_or(0)))
+        .into_iter()
+        .map(|role| RoleWithUsers::new(role, &counts))
         .collect();
-    Ok(Json(json!({ "roles": list })))
+    Ok(Json(RolesResponse { roles }))
 }
 
 async fn show_role(
     State(state): State<AdminState>,
     Authed { access, .. }: Authed,
     Path(id): Path<String>,
-) -> AdminResult<Json<JsonValue>> {
+) -> AdminResult<Json<RoleResponse>> {
     let users = state.role_admin(&access)?;
     let id = role_id(&id)?;
     let db = &state.0.ctx.db;
     let role = roles::find(db, id).await?.ok_or(AdminError::NotFound)?;
-    let count = roles::assigned(db, users, Some(id)).await?;
-    Ok(Json(
-        json!({ "role": role_json(&role, count.get(&id).copied().unwrap_or(0)) }),
-    ))
+    let counts = roles::assigned(db, users, Some(id)).await?;
+    Ok(Json(RoleResponse {
+        role: RoleWithUsers::new(role, &counts),
+    }))
 }
 
 async fn create_role(
@@ -731,11 +845,8 @@ async fn create_role(
 ) -> AdminResult<Response> {
     state.role_admin(&access)?;
     let role = roles::create(&state.0.ctx.db, &state.metas(), role_input(input)?).await?;
-    Ok((
-        StatusCode::CREATED,
-        Json(json!({ "role": role_json(&role, 0) })),
-    )
-        .into_response())
+    let role = RoleWithUsers { role, users: 0 };
+    Ok((StatusCode::CREATED, Json(RoleResponse { role })).into_response())
 }
 
 async fn update_role(
@@ -743,23 +854,23 @@ async fn update_role(
     Authed { access, .. }: Authed,
     Path(id): Path<String>,
     input: Result<Json<RoleInput>, JsonRejection>,
-) -> AdminResult<Json<JsonValue>> {
+) -> AdminResult<Json<RoleResponse>> {
     let users = state.role_admin(&access)?;
     let id = role_id(&id)?;
     let db = &state.0.ctx.db;
     let role = roles::update(db, &state.metas(), id, role_input(input)?).await?;
-    let count = roles::assigned(db, users, Some(id)).await?;
-    Ok(Json(
-        json!({ "role": role_json(&role, count.get(&id).copied().unwrap_or(0)) }),
-    ))
+    let counts = roles::assigned(db, users, Some(id)).await?;
+    Ok(Json(RoleResponse {
+        role: RoleWithUsers::new(role, &counts),
+    }))
 }
 
 async fn delete_role(
     State(state): State<AdminState>,
     Authed { access, .. }: Authed,
     Path(id): Path<String>,
-) -> AdminResult<Json<JsonValue>> {
+) -> AdminResult<Json<DeleteResponse>> {
     let users = state.role_admin(&access)?;
     roles::delete(&state.0.ctx.db, users, role_id(&id)?).await?;
-    Ok(Json(json!({ "deleted": 1 })))
+    Ok(Json(DeleteResponse { deleted: 1 }))
 }

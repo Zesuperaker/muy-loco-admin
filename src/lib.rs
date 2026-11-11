@@ -424,6 +424,8 @@ mod admin;
 mod api;
 mod assets;
 pub mod auth;
+#[cfg(test)]
+mod bindings;
 mod error;
 mod generate;
 mod meta;

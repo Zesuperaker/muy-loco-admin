@@ -11,7 +11,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo build --release --locked --bin dogfood-cli \
     && cp target/release/dogfood-cli /usr/local/bin/dogfood-cli
 
-FROM debian:trixie-20261027-slim
+FROM debian:trixie-20261104-slim
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/* \

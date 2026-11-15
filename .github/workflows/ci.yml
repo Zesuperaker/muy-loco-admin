@@ -64,7 +64,7 @@ jobs:
           rustup toolchain install "$RUST_VERSION" --profile minimal --component llvm-tools-preview
           rustup default "$RUST_VERSION"
       - uses: Swatinem/rust-cache@v2.9.3
-      - uses: taiki-e/install-action@v2.90.1
+      - uses: taiki-e/install-action@v2.90.3
         with:
           tool: cargo-llvm-cov@0.9.1
       - name: Test with coverage

@@ -32,6 +32,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2.9.3
       - run: cargo fmt --check
       - run: cargo clippy --locked --all-targets -- -D warnings
+      # Without `JwtAuth`, as an app with its own `AdminAuth` may build the crate.
+      - name: Clippy without the default features
+        run: cargo clippy --locked --no-default-features -- -D warnings
       - run: cargo doc --locked --no-deps
         env:
           RUSTDOCFLAGS: -D warnings
@@ -49,12 +52,16 @@ jobs:
           done
 
   crate-test:
-    name: Crate tests (${{ matrix.database }})
+    name: Crate tests (${{ matrix.database }}, ${{ matrix.dependencies }} dependencies)
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
         database: [sqlite, postgres]
+        # locked: the versions in Cargo.lock. floor: each of the crate's
+        # dependencies at the lowest version Cargo.toml allows. latest: each
+        # at its newest release.
+        dependencies: [locked, floor, latest]
     services:
       postgres:
         image: postgres:18.6-alpine
@@ -73,13 +80,36 @@ jobs:
         run: |
           rustup toolchain install "$RUST_VERSION" --profile minimal --component llvm-tools-preview,rustfmt
           rustup default "$RUST_VERSION"
+      # `-Z direct-minimal-versions` fails if a floor is lower than the other
+      # dependencies allow, so Cargo.toml's floors stay true. It needs a
+      # nightly Cargo; RUSTC_BOOTSTRAP lets the pinned one take the flag.
+      - name: Resolve the dependencies at their floor
+        if: matrix.dependencies == 'floor'
+        run: |
+          python3 .github/scripts/unpin-shared-dev-deps.py
+          RUSTC_BOOTSTRAP=1 cargo update -Z direct-minimal-versions
+          cargo tree --locked --depth 1 --edges normal
+      - name: Resolve the dependencies at their latest
+        if: matrix.dependencies == 'latest'
+        run: |
+          python3 .github/scripts/unpin-shared-dev-deps.py
+          cargo update
+          cargo tree --locked --depth 1 --edges normal
       - uses: Swatinem/rust-cache@v2.9.3
+        with:
+          key: ${{ matrix.dependencies }}
       - uses: taiki-e/install-action@v2.90.3
+        if: matrix.dependencies == 'locked'
         with:
           tool: cargo-llvm-cov@0.9.1
       - name: Test with coverage
+        if: matrix.dependencies == 'locked'
         run: cargo llvm-cov --locked --fail-under-lines 90 --lcov --output-path lcov.info
+      - name: Test
+        if: matrix.dependencies != 'locked'
+        run: cargo test --locked
       - uses: actions/upload-artifact@v7.0.2
+        if: matrix.dependencies == 'locked'
         with:
           name: coverage-${{ matrix.database }}
           path: lcov.info

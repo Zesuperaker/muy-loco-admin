@@ -39,6 +39,19 @@ until curl -fs http://localhost:5150/_ping >/dev/null; do sleep 2; done
 
 CI keeps line coverage at or above 90% for the crate and 85% for the frontend.
 
+CI also runs the crate tests with each of the crate's dependencies at its floor, the lowest
+version `Cargo.toml` allows, and at its latest release. To do the same locally:
+
+```sh
+python3 .github/scripts/unpin-shared-dev-deps.py            # lets the tests use other versions
+RUSTC_BOOTSTRAP=1 cargo update -Z direct-minimal-versions   # floor; `cargo update` for latest
+cargo test
+git checkout Cargo.toml Cargo.lock                          # do not commit either
+```
+
+If the floor does not resolve, a floor in `Cargo.toml` is lower than another dependency allows:
+raise it to the version the error names.
+
 The UI's types for API requests and responses come from the Rust types that define them, never
 written by hand: derive `ts_rs::TS` on them in test builds, and list new top-level request or
 response bodies in `src/bindings.rs`. `cargo test` regenerates `frontend/src/bindings.ts`

@@ -1,7 +1,7 @@
 use dogfood::{
     app::App,
     models::{
-        _entities::{article_tags, articles},
+        _entities::{article_tags, articles, users},
         articles::ArticleStatus,
     },
 };
@@ -323,6 +323,43 @@ async fn roles_limit_admin_users() {
             .add_header(CSRF.0, CSRF.1)
             .await;
         assert_eq!(res.status_code(), 409);
+    })
+    .await;
+}
+
+#[tokio::test]
+#[serial]
+async fn a_password_reset_ends_admin_sessions() {
+    request::<App, _, _>(|request, ctx| async move {
+        seed::<App>(&ctx).await.unwrap();
+        let token = login(&request, ADMIN).await;
+        let res = request
+            .post("/admin/api/session")
+            .add_header(CSRF.0, CSRF.1)
+            .authorization_bearer(&token)
+            .await;
+        assert_eq!(res.status_code(), 200, "{}", res.text());
+        let session = res.cookies();
+        let me = || request.get("/admin/api/me").add_cookies(session.clone());
+        assert_eq!(me().await.status_code(), 200);
+
+        let res = request
+            .post("/api/auth/forgot")
+            .json(&json!({"email": ADMIN.0}))
+            .await;
+        assert_eq!(res.status_code(), 200);
+        let user = users::Model::find_by_email(&ctx.db, ADMIN.0).await.unwrap();
+        let res = request
+            .post("/api/auth/reset")
+            .json(&json!({"token": user.reset_token, "password": "a-new-password"}))
+            .await;
+        assert_eq!(res.status_code(), 200);
+
+        assert_eq!(
+            me().await.status_code(),
+            401,
+            "the session from before the reset no longer signs in"
+        );
     })
     .await;
 }

@@ -61,7 +61,7 @@
 //!
 //! A foreign key becomes a link and a searchable picker when the model it points to is
 //! registered too, and that model's records link back to the records that refer to them.
-//! Otherwise it is a plain id field.
+//! Otherwise it is a plain id field, as is a key to a column its model hides.
 //!
 //! ## Generating the model list
 //!

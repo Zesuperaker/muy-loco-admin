@@ -322,6 +322,14 @@ impl Admin {
                 .or_insert_with(|| meta.name.clone());
         }
 
+        // A key to a column its model hides stays a plain value: links, labels
+        // and the picker all read the column the key refers to, which the
+        // admin never sends.
+        let shows = |model: &String, column: &str| {
+            self.resources.iter().map(|r| r.meta()).any(|target| {
+                target.name == *model && target.fields.iter().any(|f| f.name == column)
+            })
+        };
         let mut metas: Vec<_> = self.resources.iter().map(|r| r.meta().clone()).collect();
         for meta in &mut metas {
             let users = user_roles.filter(|r| r.table == meta.table);
@@ -332,7 +340,10 @@ impl Admin {
                     field.relation = None;
                 }
                 if let Some(rel) = &mut field.relation {
-                    rel.model = tables.get(&rel.table).cloned();
+                    rel.model = tables
+                        .get(&rel.table)
+                        .filter(|model| shows(model, &rel.column))
+                        .cloned();
                 }
             }
         }

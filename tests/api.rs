@@ -8,7 +8,7 @@ use common::{
 use loco_rs::app::AppContext;
 use muy_loco_admin::{Admin, AllowAll, MAX_PER_PAGE, ModelAdmin, SortDirection};
 use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
-use sea_orm::{ActiveModelTrait, ConnectionTrait, EntityTrait, IntoActiveModel, Set};
+use sea_orm::{ActiveModelTrait, ConnectionTrait, EntityTrait, IntoActiveModel, Schema, Set};
 use serde_json::{Value, json};
 
 fn admin() -> Admin {
@@ -823,6 +823,126 @@ async fn delete_runs_hooks_in_a_transaction() {
         "at most 500 records can be selected at once"
     );
     assert_eq!(count::<posts::Entity>(&db.db).await, 1, "nothing deleted");
+}
+
+/// `orders.customer_code` refers to `customers.code`, a column other than the key.
+mod customers {
+    use sea_orm::entity::prelude::*;
+
+    #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
+    #[sea_orm(table_name = "customers")]
+    pub struct Model {
+        #[sea_orm(primary_key)]
+        pub id: i32,
+        pub name: String,
+        #[sea_orm(unique)]
+        pub code: String,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
+mod orders {
+    use sea_orm::entity::prelude::*;
+
+    #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
+    #[sea_orm(table_name = "orders")]
+    pub struct Model {
+        #[sea_orm(primary_key)]
+        pub id: i32,
+        pub customer_code: String,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {
+        #[sea_orm(
+            belongs_to = "super::customers::Entity",
+            from = "Column::CustomerCode",
+            to = "super::customers::Column::Code"
+        )]
+        Customers,
+    }
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
+#[tokio::test]
+async fn a_foreign_key_to_a_hidden_column_is_a_plain_field() {
+    let (db, ctx) = setup().await;
+    let schema = Schema::new(db.db.get_database_backend());
+    for table in [
+        schema.create_table_from_entity(customers::Entity),
+        schema.create_table_from_entity(orders::Entity),
+    ] {
+        db.db.execute(&table).await.unwrap();
+    }
+    customers::ActiveModel {
+        name: Set("Ann".into()),
+        code: Set("A1".into()),
+        ..Default::default()
+    }
+    .insert(&db.db)
+    .await
+    .unwrap();
+    let order = orders::ActiveModel {
+        customer_code: Set("A1".into()),
+        ..Default::default()
+    }
+    .insert(&db.db)
+    .await
+    .unwrap();
+    let customer_code = |schema: &Value| {
+        let orders = model(schema, "orders");
+        orders["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["name"] == "customer_code")
+            .unwrap()
+            .clone()
+    };
+
+    // Shown, the column links the two models both ways.
+    let router = Admin::new(AllowAll)
+        .model::<customers::Entity>()
+        .model::<orders::Entity>()
+        .router(&ctx)
+        .await
+        .unwrap();
+    let client = Client::new(router);
+    let schema = client.get("/api/schema").await.json();
+    assert_eq!(customer_code(&schema)["relation"]["model"], "customers");
+    assert_eq!(model(&schema, "customers")["related"][0]["model"], "orders");
+    let list = client.get("/api/models/orders/records").await;
+    assert_eq!(list.status, 200, "{}", list.text());
+    assert_eq!(list.json()["labels"]["customer_code"]["A1"], "Ann");
+
+    // Hidden, the key is a plain value: nothing reads the column it refers to.
+    let router = Admin::new(AllowAll)
+        .register(ModelAdmin::<customers::Entity>::new().hidden_fields(["code"]))
+        .model::<orders::Entity>()
+        .router(&ctx)
+        .await
+        .unwrap();
+    let client = Client::new(router);
+    let schema = client.get("/api/schema").await.json();
+    assert_eq!(customer_code(&schema)["relation"]["model"], Value::Null);
+    assert_eq!(model(&schema, "customers")["related"], json!([]));
+    let list = client.get("/api/models/orders/records").await;
+    assert_eq!(list.status, 200, "{}", list.text());
+    assert_eq!(list.json()["records"][0]["values"]["customer_code"], "A1");
+    assert_eq!(list.json()["labels"], json!({}));
+    let show = client
+        .get(&format!("/api/models/orders/records/{}", order.id))
+        .await;
+    assert_eq!(show.status, 200, "{}", show.text());
+    let res = client
+        .get("/api/models/customers/lookup?column=code&q=A")
+        .await;
+    assert_eq!(res.status, 400, "the hidden column cannot be looked up");
 }
 
 #[tokio::test]

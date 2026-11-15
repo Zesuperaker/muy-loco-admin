@@ -699,8 +699,13 @@ where
         convert::<E::ActiveModel>(column.col, &normalize(column.kind, input))
     }
 
+    /// The record's key as the API writes it.
+    fn key(&self, model: &E::Model) -> String {
+        encode_key(&self.pk.iter().map(|c| model.get(*c)).collect::<Vec<_>>())
+    }
+
     fn record(&self, model: &E::Model) -> Record {
-        let key = encode_key(&self.pk.iter().map(|c| model.get(*c)).collect::<Vec<_>>());
+        let key = self.key(model);
         let values = self
             .columns
             .iter()
@@ -740,6 +745,24 @@ where
             .one(db)
             .await?
             .ok_or(AdminError::NotFound)
+    }
+
+    /// The records with `keys`, each once: a key sent twice, or spelled two
+    /// ways (`7` and `07`), selects its record once.
+    async fn find_all<C: ConnectionTrait>(
+        &self,
+        db: &C,
+        keys: &[String],
+    ) -> AdminResult<Vec<E::Model>> {
+        let mut seen = HashSet::new();
+        let mut models = Vec::with_capacity(keys.len());
+        for key in keys {
+            let model = self.find(db, key).await?;
+            if seen.insert(self.key(&model)) {
+                models.push(model);
+            }
+        }
+        Ok(models)
     }
 
     /// Whether `params` narrows the list down.
@@ -1279,12 +1302,13 @@ where
 
     async fn delete(&self, db: &DatabaseConnection, keys: &[String]) -> AdminResult<u64> {
         let txn = db.begin().await?;
-        for key in keys {
-            let model = self.find(&txn, key).await?;
+        let models = self.find_all(&txn, keys).await?;
+        let deleted = models.len() as u64;
+        for model in models {
             model.into_active_model().delete(&txn).await?;
         }
         txn.commit().await?;
-        Ok(keys.len() as u64)
+        Ok(deleted)
     }
 
     async fn export(
@@ -1390,10 +1414,7 @@ where
             .iter()
             .find(|a| a.name == name)
             .ok_or(AdminError::NotFound)?;
-        let mut models = Vec::with_capacity(keys.len());
-        for key in keys {
-            models.push(self.find(&ctx.db, key).await?);
-        }
+        let models = self.find_all(&ctx.db, keys).await?;
         (action.handler)(ctx.clone(), models)
             .await
             .map_err(|err| action_error(name, err))

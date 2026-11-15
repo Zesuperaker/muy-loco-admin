@@ -826,6 +826,32 @@ async fn delete_runs_hooks_in_a_transaction() {
 }
 
 #[tokio::test]
+async fn a_record_selected_twice_is_handled_once() {
+    let (db, _ctx, client) = client().await;
+    let ann = create_user(&db.db, "ann@example.com", true).await;
+    let a = create_post(&db.db, ann.id, "first").await;
+    let b = create_post(&db.db, ann.id, "second").await;
+    create_post(&db.db, ann.id, "third").await;
+
+    // The same key twice, and the same record spelled another way.
+    let keys = json!({"keys": [a.id.to_string(), a.id.to_string(), format!("0{}", a.id)]});
+    let res = client
+        .post("/api/models/posts/actions/publish", keys.clone())
+        .await;
+    assert_eq!(res.status, 200, "{}", res.text());
+    assert_eq!(res.json()["message"], "published 1 posts");
+
+    let res = client.post("/api/models/posts/bulk-delete", keys).await;
+    assert_eq!(res.status, 200, "{}", res.text());
+    assert_eq!(res.json(), json!({"deleted": 1}));
+
+    let keys = json!({"keys": [b.id.to_string(), b.id.to_string()]});
+    let res = client.post("/api/models/posts/bulk-delete", keys).await;
+    assert_eq!(res.json(), json!({"deleted": 1}));
+    assert_eq!(count::<posts::Entity>(&db.db).await, 1);
+}
+
+#[tokio::test]
 async fn export_writes_csv() {
     let (db, _ctx, client) = client().await;
     let ann = create_user(&db.db, "ann@example.com", true).await;

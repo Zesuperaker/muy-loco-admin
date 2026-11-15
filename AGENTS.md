@@ -24,10 +24,12 @@ Run the checks in `CONTRIBUTING.md` before committing; CI runs the same.
 - Support only the databases Loco supports: Postgres and SQLite. Crate tests must pass on both.
 - After any UI change, run `npm run build` and commit `frontend/dist`. Only `index.html` may
   contain the `/__MLA_BASE__` placeholder.
-- Crate dependencies use loco-rs's version requirement as the floor; crates loco-rs does not use
-  take their latest release as the floor. Dev dependencies, the dogfood app, npm packages,
-  Docker images and GitHub Actions are pinned to exact latest versions; `release.yml` pins
-  actions by commit SHA, with the version in a comment.
+- Crate dependencies use loco-rs's version requirement as the floor, raised only where the crate
+  cannot be built at it; crates loco-rs does not use take their latest release as the floor. CI
+  tests the crate with every dependency at its floor and at its latest release. Dev
+  dependencies, the dogfood app, npm packages, Docker images and GitHub Actions are pinned to
+  exact latest versions; `release.yml` pins actions by commit SHA, with the version in a
+  comment.
 - `rust-version` stays at loco-rs's (1.94).
 - Do not add low-star or unmaintained dependencies.
 - Keep coverage at or above the CI thresholds (Rust 90% lines, frontend 85% lines).

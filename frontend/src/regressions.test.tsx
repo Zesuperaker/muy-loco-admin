@@ -1,7 +1,10 @@
-// Regression tests for bugs found in the review before 0.1.0.
-import { screen, waitFor, within } from "@testing-library/react";
+// Regression tests for bugs found in reviews.
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import { hasRawJson, parseJson } from "./json";
+import { shareData } from "./queryClient";
+import { emptyGrant } from "./roles";
 import {
   baseRoutes,
   currentLocation,
@@ -264,5 +267,254 @@ describe("sign-out", () => {
     await user.click(screen.getByRole("button", { name: "Sign out" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Sign-out failed: store down");
     expect(screen.getByRole("heading", { name: "Dashboard" })).toBeInTheDocument();
+  });
+});
+
+describe("forms opened from the cache", () => {
+  it("a record's fields follow the fresh copy when it arrives", async () => {
+    let title = "Post 7";
+    mockFetch(
+      baseRoutes({
+        "GET /admin/api/models/posts/records": { body: pageOf([postRecord(7)]) },
+        "GET /admin/api/models/posts/records/7": () => ({
+          body: { record: postRecord(7, { title, status: title === "Post 7" ? "draft" : "published" }), labels: {} },
+        }),
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp("/admin/models/posts/records/7");
+    await screen.findByRole("heading", { name: "Post 7" });
+    expect(screen.getByLabelText("Title")).toHaveValue("Post 7");
+
+    // The record changes while the list is open; reopening it shows the
+    // cached copy first, then the fresh one.
+    await user.click(screen.getByRole("link", { name: "← Posts" }));
+    await screen.findByRole("table");
+    title = "Changed elsewhere";
+    await user.click(screen.getByRole("link", { name: "Post 7" }));
+    await waitFor(() => expect(screen.getByLabelText("Title")).toHaveValue("Changed elsewhere"));
+    expect(screen.getByLabelText("Status")).toHaveValue("published");
+  });
+
+  it("an edited field keeps its text when the record is fetched again", async () => {
+    let views = 3;
+    mockFetch(
+      baseRoutes({
+        "GET /admin/api/models/posts/records/7": () => ({
+          body: { record: postRecord(7, { views }), labels: {} },
+        }),
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp("/admin/models/posts/records/7");
+    await screen.findByRole("heading", { name: "Post 7" });
+    await user.clear(screen.getByLabelText("Title"));
+    await user.type(screen.getByLabelText("Title"), "Mine");
+
+    // Coming back online fetches the record again under the open form.
+    views = 40;
+    window.dispatchEvent(new Event("offline"));
+    window.dispatchEvent(new Event("online"));
+    await waitFor(() => expect(screen.getByLabelText("Views")).toHaveValue("40"));
+    expect(screen.getByLabelText("Title")).toHaveValue("Mine");
+  });
+
+  it("a role's permissions follow the fresh copy, and a save sends only what was edited", async () => {
+    const manager = { id: "1", name: "Ann", role: null, can_manage_roles: true };
+    let grant = { ...emptyGrant(), view: true };
+    const role = () => ({ id: 3, name: "Editor", permissions: { posts: grant }, users: 0 });
+    const { calls } = mockFetch(
+      baseRoutes({
+        "GET /admin/api/me": { body: manager },
+        "GET /admin/api/roles": () => ({ body: { roles: [role()] } }),
+        "GET /admin/api/roles/3": () => ({ body: { role: role() } }),
+        "PATCH /admin/api/roles/3": (call) => ({ body: { role: { ...role(), ...(call.body as object) } } }),
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp("/admin/roles/3");
+    await screen.findByRole("heading", { name: "Editor" });
+    expect(screen.getByLabelText("Posts: Delete")).not.toBeChecked();
+
+    // Another admin lets the role delete posts while the list is open.
+    await user.click(screen.getByRole("link", { name: "← Roles" }));
+    await screen.findByRole("heading", { name: "Roles" });
+    grant = { ...grant, delete: true };
+    await user.click(await screen.findByRole("link", { name: "Editor" }));
+    await waitFor(() => expect(screen.getByLabelText("Posts: Delete")).toBeChecked());
+
+    // Renaming the role leaves its permissions to the server.
+    await user.type(screen.getByLabelText("Name"), "s");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByText("Saved")).toBeInTheDocument();
+    expect(calls.find((c) => c.method === "PATCH")?.body).toEqual({ name: "Editors" });
+  });
+});
+
+describe("input the browser cannot read", () => {
+  it("is refused instead of saved as no value", async () => {
+    const { calls } = mockFetch(
+      baseRoutes({
+        "GET /admin/api/models/posts/records/7": {
+          body: { record: postRecord(7, { rating: 2.5, published_on: "2024-05-06" }), labels: {} },
+        },
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp("/admin/models/posts/records/7");
+    await screen.findByRole("heading", { name: "Post 7" });
+
+    await user.clear(screen.getByLabelText("Rating"));
+    await user.type(screen.getByLabelText("Rating"), "1e");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByText("must be a number")).toBeInTheDocument();
+
+    // Half a date: the browser reports the input as empty and its text as bad.
+    await user.clear(screen.getByLabelText("Rating"));
+    await user.type(screen.getByLabelText("Rating"), "3.5");
+    const date = screen.getByLabelText("Published on");
+    fireEvent.change(date, { target: { value: "" } });
+    Object.defineProperty(date, "validity", { value: { badInput: true } });
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByText("is incomplete or not valid")).toBeInTheDocument();
+    expect(calls.filter((c) => c.method === "PATCH")).toHaveLength(0);
+  });
+});
+
+const meta = () => screen.getByLabelText<HTMLTextAreaElement>("Meta");
+
+describe("integers beyond 2^53 in JSON fields", () => {
+  it("are kept by the query cache when the field changes", async () => {
+    let n = "9007199254740993";
+    const { fetchMock } = mockFetch(
+      baseRoutes({
+        "GET /admin/api/models/posts/records": { body: pageOf([postRecord(7)]) },
+        "GET /admin/api/models/posts/records/7": () => ({ text: postText("1", `{"n":${n}}`) }),
+        "PATCH /admin/api/models/posts/records/7": () => {
+          n = "9007199254740995";
+          return { text: postText("1", `{"n":${n}}`) };
+        },
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp("/admin/models/posts/records/7");
+    await screen.findByRole("heading", { name: "Post 7" });
+    await user.clear(meta());
+    await user.type(meta(), '{{"n": 9007199254740995}');
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByText("Saved")).toBeInTheDocument();
+    expect(bodies(fetchMock, "PATCH")[0]).toBe('{"meta":{"n":9007199254740995}}');
+    expect(meta().value).toBe('{\n  "n": 9007199254740995\n}');
+
+    await user.click(screen.getByRole("link", { name: "← Posts" }));
+    await screen.findByRole("table");
+    await user.click(screen.getByRole("link", { name: "Post 7" }));
+    await screen.findByRole("heading", { name: "Post 7" });
+    expect(meta().value).toBe('{\n  "n": 9007199254740995\n}');
+  });
+
+  it("stop structural sharing, which would copy them into plain objects", () => {
+    const previous = parseJson('{"a":{"n":9007199254740993},"b":[1]}');
+    const next = parseJson('{"a":{"n":9007199254740995},"b":[1]}');
+    expect(hasRawJson(next)).toBe(true);
+    expect(JSON.stringify(shareData(previous, next))).toBe('{"a":{"n":9007199254740995},"b":[1]}');
+    // Without them, unchanged parts are still shared.
+    const plain = { a: { n: 1 }, b: [1] };
+    const shared = shareData(plain, { a: { n: 2 }, b: [1] }) as typeof plain;
+    expect(hasRawJson(plain)).toBe(false);
+    expect(shared.a).toEqual({ n: 2 });
+    expect(shared.b).toBe(plain.b);
+  });
+});
+
+describe("list filters", () => {
+  it("keep the keyboard focus when they change", async () => {
+    mockFetch(baseRoutes({ "GET /admin/api/models/posts/records": { body: pageOf([postRecord(1)]) } }));
+    const user = userEvent.setup();
+    renderApp("/admin/models/posts");
+    await screen.findByRole("table");
+
+    await user.selectOptions(screen.getByLabelText("Status"), "published");
+    expect(currentLocation()).toBe("/models/posts?filter.status=published");
+    expect(screen.getByLabelText("Status")).toHaveFocus();
+
+    await user.type(screen.getByLabelText("Views"), "5{Enter}");
+    expect(currentLocation()).toBe("/models/posts?filter.status=published&filter.views=5");
+    expect(screen.getByLabelText("Views")).toHaveFocus();
+
+    // A filter cleared another way empties its field.
+    await user.click(screen.getByRole("button", { name: "Clear" }));
+    expect(currentLocation()).toBe("/models/posts");
+    expect(screen.getByLabelText("Views")).toHaveValue("");
+  });
+
+  it("show a filter the model does not list, such as one from a Related link", async () => {
+    const tags = { ...usersModel, name: "tags", label: "Tags", search_fields: [], list_filter: [] };
+    mockFetch(
+      baseRoutes({
+        "GET /admin/api/schema": { body: { models: [tags] } },
+        "GET /admin/api/models/tags/records": { body: pageOf([]) },
+        "GET /admin/api/models/tags/count": { body: { count: { kind: "exact", value: 0 } } },
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp("/admin/models/tags");
+    await screen.findByRole("table");
+    expect(screen.queryByLabelText("Name")).not.toBeInTheDocument();
+
+    renderApp("/admin/models/tags?filter.name=rust");
+    const name = await screen.findByLabelText("Name");
+    expect(name).toHaveValue("rust");
+    await user.click(screen.getByRole("button", { name: "Clear" }));
+    expect(currentLocation()).toBe("/models/tags");
+  });
+});
+
+describe("the page title", () => {
+  it("is reset on pages without one of their own", async () => {
+    mockFetch(baseRoutes({ "GET /admin/api/models/posts/records": { body: pageOf([postRecord(1)]) } }));
+    const user = userEvent.setup();
+    renderApp("/admin/models/posts");
+    await screen.findByRole("table");
+    expect(document.title).toBe("Posts · Test Admin");
+    await user.click(screen.getByRole("link", { name: "Test Admin" }));
+    await screen.findByRole("heading", { name: "Dashboard" });
+    expect(document.title).toBe("Test Admin");
+  });
+});
+
+describe("a rejected form", () => {
+  it("tells assistive technology which field to fix, and drops the last attempt's error", async () => {
+    mockFetch(
+      baseRoutes({
+        "GET /admin/api/models/posts/records/7": { body: { record: postRecord(7), labels: {} } },
+        "PATCH /admin/api/models/posts/records/7": {
+          status: 422,
+          body: { error: "some fields are invalid", fields: { title: ["title must not be empty"] } },
+        },
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp("/admin/models/posts/records/7");
+    await screen.findByRole("heading", { name: "Post 7" });
+    const title = screen.getByLabelText("Title");
+    expect(title).toHaveAttribute("aria-required", "true");
+    expect(screen.getByLabelText("Rating")).not.toHaveAttribute("aria-required");
+    expect(title).not.toHaveAttribute("aria-invalid");
+
+    await user.clear(title);
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("some fields are invalid");
+    await waitFor(() => expect(title).toHaveFocus());
+    expect(title).toHaveAttribute("aria-invalid", "true");
+    expect(title).toHaveAccessibleDescription("title must not be empty");
+
+    // The next attempt fails in the form itself: the server's error is gone.
+    await user.type(screen.getByLabelText("Price"), "x");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByText("must be a decimal number")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Price")).toHaveFocus();
+    expect(title).not.toHaveAttribute("aria-invalid");
   });
 });

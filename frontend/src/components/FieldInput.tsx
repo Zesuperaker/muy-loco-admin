@@ -2,6 +2,14 @@ import type { FieldMeta } from "../types";
 import { ForeignKeyPicker } from "./ForeignKeyPicker";
 import { RoleSelect } from "./RoleSelect";
 
+/** What assistive technology is told about a control. */
+export interface ControlAria {
+  "aria-required"?: boolean;
+  "aria-invalid"?: boolean;
+  /** The id of the element holding the control's error messages. */
+  "aria-describedby"?: string;
+}
+
 export function FieldInput({
   field,
   value,
@@ -9,6 +17,7 @@ export function FieldInput({
   disabled,
   fkLabel,
   onPick,
+  aria,
 }: {
   field: FieldMeta;
   value: string;
@@ -16,9 +25,10 @@ export function FieldInput({
   disabled: boolean;
   fkLabel?: string;
   onPick?: (value: string, label: string) => void;
+  aria?: ControlAria;
 }) {
   const id = `field-${field.name}`;
-  const common = { id, disabled, className: "input", name: field.name };
+  const common = { id, disabled, className: "input", name: field.name, ...aria };
 
   if (field.role) {
     return (
@@ -29,6 +39,7 @@ export function FieldInput({
           label={fkLabel}
           disabled={disabled}
           emptyLabel="No role (full access)"
+          aria={aria}
           onChange={onChange}
         />
         <p className="text-xs text-slate-500">Admins without a role have full access.</p>
@@ -44,6 +55,7 @@ export function FieldInput({
         value={value}
         label={fkLabel}
         disabled={disabled}
+        aria={aria}
         onChange={onPick}
       />
     );
@@ -80,6 +92,7 @@ export function FieldInput({
           name={field.name}
           type="checkbox"
           disabled={disabled}
+          {...aria}
           className="h-4 w-4 rounded border-slate-300 text-indigo-600"
           checked={value === "true"}
           onChange={(e) => onChange(e.target.checked ? "true" : "false")}
@@ -108,8 +121,11 @@ export function FieldInput({
         <input {...common} inputMode="numeric" value={value} onChange={(e) => onChange(e.target.value)} />
       );
     case "float":
+      // Text, not `type="number"`: a number input reports text it cannot
+      // read, such as `1e`, as empty, which would save as no value.
+      // `fromInput` checks the number.
       return (
-        <input {...common} type="number" step="any" value={value} onChange={(e) => onChange(e.target.value)} />
+        <input {...common} inputMode="decimal" value={value} onChange={(e) => onChange(e.target.value)} />
       );
     case "decimal":
       return (

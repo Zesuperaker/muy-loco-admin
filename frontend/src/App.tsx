@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect } from "react";
+import { type ReactNode, useEffect } from "react";
 import { Link, Route, Routes, useParams } from "react-router";
 import { ApiError, api, onUnauthorized } from "./api";
 import { Dashboard } from "./components/Dashboard";
@@ -10,6 +10,7 @@ import { RecordPage } from "./components/RecordPage";
 import { RoleList, RolePage } from "./components/Roles";
 import { ErrorBanner, Spinner, useToast } from "./components/ui";
 import { paths } from "./paths";
+import { useTitle } from "./title";
 import type { AdminConfig, CurrentUser, ModelMeta } from "./types";
 import { UserContext } from "./user";
 
@@ -24,10 +25,10 @@ function NotFound() {
   );
 }
 
-function useTitle(title: string) {
-  useEffect(() => {
-    document.title = title;
-  }, [title]);
+/** A page without a title of its own, such as the dashboard. */
+function Page({ title, children }: { title: string; children: ReactNode }) {
+  useTitle(title);
+  return children;
 }
 
 function ModelRoute({
@@ -91,7 +92,6 @@ function Shell({
   onSignOut: () => void;
 }) {
   const schema = useQuery({ queryKey: ["schema"], queryFn: api.schema });
-  useTitle(config.title);
   const models = schema.data?.models ?? [];
   return (
     <UserContext value={user}>
@@ -108,7 +108,14 @@ function Shell({
           <ErrorBanner error={schema.error} />
         ) : (
           <Routes>
-            <Route path="/" element={<Dashboard models={models} />} />
+            <Route
+              path="/"
+              element={
+                <Page title={config.title}>
+                  <Dashboard models={models} />
+                </Page>
+              }
+            />
             <Route
               path="/models/:model"
               element={<ModelRoute models={models} view="list" title={config.title} />}
@@ -137,7 +144,14 @@ function Shell({
                 />
               </>
             )}
-            <Route path="*" element={<NotFound />} />
+            <Route
+              path="*"
+              element={
+                <Page title={config.title}>
+                  <NotFound />
+                </Page>
+              }
+            />
           </Routes>
         )}
       </Layout>

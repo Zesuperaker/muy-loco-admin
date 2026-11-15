@@ -3,6 +3,7 @@ import { useEffect, useId, useState } from "react";
 import { api } from "../api";
 import { keyText } from "../format";
 import type { FieldMeta } from "../types";
+import type { ControlAria } from "./FieldInput";
 import { Button } from "./ui";
 
 /** A searchable picker for a foreign-key field. `value` is the key as text. */
@@ -14,6 +15,7 @@ export function ForeignKeyPicker({
   disabled = false,
   id,
   placeholder = "Search…",
+  aria,
 }: {
   field: FieldMeta;
   value: string;
@@ -22,6 +24,7 @@ export function ForeignKeyPicker({
   disabled?: boolean;
   id?: string;
   placeholder?: string;
+  aria?: ControlAria;
 }) {
   const relation = field.relation;
   const target = relation?.model ?? "";
@@ -60,6 +63,7 @@ export function ForeignKeyPicker({
           aria-controls={listId}
           aria-autocomplete="list"
           aria-activedescendant={open && active >= 0 ? `${listId}-${active}` : undefined}
+          {...aria}
           className="input"
           placeholder={value ? (label ?? value) : placeholder}
           value={shown}

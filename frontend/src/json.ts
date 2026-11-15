@@ -3,6 +3,14 @@ type RawJson = (text: string) => unknown;
 /** `JSON.rawJSON`, where the browser has it (not yet in TypeScript's lib). */
 const rawJSON = (JSON as unknown as { rawJSON?: RawJson }).rawJSON;
 
+const isRawJSON = (JSON as unknown as { isRawJSON?: (value: unknown) => boolean }).isRawJSON;
+
+/** Whether `value` is, or holds, a `JSON.rawJSON` value. */
+export function hasRawJson(value: unknown): boolean {
+  if (!isRawJSON || typeof value !== "object" || value === null) return false;
+  return isRawJSON(value) || Object.values(value).some(hasRawJson);
+}
+
 /**
  * `JSON.parse`, keeping integers that JavaScript would round exactly as
  * written: they become `JSON.rawJSON` values, which `JSON.stringify` writes

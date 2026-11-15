@@ -180,6 +180,7 @@
 //! | [`Admin::path`] | `/admin`; letters, digits, `-`, `_`, `.` and `~` between single slashes |
 //! | [`Admin::site_url`] | `/` |
 //! | [`Admin::export_idle_timeout`] | 60 s; a CSV download that stalls this long is stopped and its transaction rolled back |
+//! | [`Admin::export_timeout`] | 10 min; a CSV download that takes longer in all is stopped too, so a slow client cannot keep a database connection |
 //!
 //! The UI's title is always "Muy Loco Admin".
 //!

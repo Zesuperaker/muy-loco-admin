@@ -23,6 +23,7 @@ use futures_util::{StreamExt, stream};
 use loco_rs::{app::AppContext, auth::session::Session};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value as JsonValue};
+use tokio::time::{Instant, timeout};
 
 use crate::{
     auth::{AdminAuth, AdminUser, LoginMethod, UserRoles},
@@ -54,6 +55,7 @@ pub(crate) struct Inner {
     /// Target of the UI's "Visit site" link; `None` hides it.
     pub site_url: Option<String>,
     pub export_idle_timeout: Duration,
+    pub export_timeout: Duration,
     pub base_path: String,
     pub auth: Arc<dyn AdminAuth>,
     /// Where users' roles are kept, when roles are on.
@@ -745,35 +747,72 @@ async fn export(
             ),
             (header::CONTENT_DISPOSITION, disposition),
         ],
-        spawn_export(csv, idle),
+        spawn_export(csv, idle, state.0.export_timeout),
     )
         .into_response())
+}
+
+/// Why an export's task stopped waiting.
+enum Stopped {
+    /// Nothing happened for the idle timeout.
+    Idle,
+    /// The export ran out of time.
+    Late,
+}
+
+/// `future`'s output, unless it takes longer than `idle` or is still running
+/// at `deadline`.
+async fn within<F: Future>(
+    idle: Duration,
+    deadline: Option<Instant>,
+    future: F,
+) -> Result<F::Output, Stopped> {
+    let Some(deadline) = deadline else {
+        return timeout(idle, future).await.map_err(|_| Stopped::Idle);
+    };
+    let left = deadline.saturating_duration_since(Instant::now());
+    match timeout(idle.min(left), future).await {
+        Ok(output) => Ok(output),
+        Err(_) if left <= idle => Err(Stopped::Late),
+        Err(_) => Err(Stopped::Idle),
+    }
 }
 
 /// Run `csv` in its own task and hand chunks to the response one at a time.
 ///
 /// A stalled download stops the server from reading the response body, so a
 /// timeout inside the body would never fire. Here the task waits at most
-/// `idle` for the database to produce a chunk and for the client to take it;
-/// otherwise it stops, which rolls the export's transaction back and frees
-/// its connection. A response that ends early is aborted with an error, so
-/// the client never mistakes it for a complete file.
-fn spawn_export(mut csv: CsvStream, idle: Duration) -> Body {
+/// `idle` for the database to produce a chunk and for the client to take it,
+/// and at most `limit` in all, so a client that reads just fast enough cannot
+/// keep the export's connection either; otherwise it stops, which rolls the
+/// export's transaction back and frees its connection. A response that ends
+/// early is aborted with an error, so the client never mistakes it for a
+/// complete file.
+fn spawn_export(mut csv: CsvStream, idle: Duration, limit: Duration) -> Body {
     let (tx, rx) = tokio::sync::mpsc::channel::<Bytes>(1);
     let finished = Arc::new(AtomicBool::new(false));
     let done = Arc::clone(&finished);
+    // A limit too long to add to the clock is no limit.
+    let deadline = Instant::now().checked_add(limit);
     tokio::spawn(async move {
+        let late = || tracing::warn!(?limit, "CSV export stopped: it took too long");
         loop {
-            let chunk = match tokio::time::timeout(idle, csv.next()).await {
+            let chunk = match within(idle, deadline, csv.next()).await {
                 Ok(Some(Ok(chunk))) => chunk,
                 Ok(None) => return done.store(true, Ordering::Release),
                 Ok(Some(Err(err))) => return tracing::error!(error = %err, "CSV export failed"),
-                Err(_) => return tracing::warn!("CSV export stopped: no rows from the database"),
+                Err(Stopped::Idle) => {
+                    return tracing::warn!("CSV export stopped: no rows from the database");
+                }
+                Err(Stopped::Late) => return late(),
             };
-            match tokio::time::timeout(idle, tx.send(chunk)).await {
+            match within(idle, deadline, tx.send(chunk)).await {
                 Ok(Ok(())) => {}
                 Ok(Err(_)) => return,
-                Err(_) => return tracing::warn!("CSV export stopped: the client stopped reading"),
+                Err(Stopped::Idle) => {
+                    return tracing::warn!("CSV export stopped: the client stopped reading");
+                }
+                Err(Stopped::Late) => return late(),
             }
         }
     });

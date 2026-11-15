@@ -287,3 +287,42 @@ async fn slow_clients_within_the_limit_get_everything() {
     }
     assert_eq!(lines, 1 + 1_100);
 }
+
+#[tokio::test]
+async fn a_download_that_takes_too_long_is_stopped() {
+    let (db, ctx) = setup().await;
+    let ann = create_user(&db.db, "ann@example.com", true).await;
+    insert_posts(&db.db, ann.id, 2_600, "bulk").await;
+    // The client below never stalls for the idle timeout, so only the limit
+    // on the whole export stops it.
+    let router = Admin::new(AllowAll)
+        .model::<posts::Entity>()
+        .export_idle_timeout(Duration::from_secs(5))
+        .export_timeout(Duration::from_millis(400))
+        .router(&ctx)
+        .await
+        .unwrap();
+
+    let mut body = export_body(&router, "/api/models/posts/export").await;
+    let mut rows = 0;
+    let mut failed = false;
+    while let Some(frame) = body.frame().await {
+        let Ok(frame) = frame else {
+            failed = true;
+            break;
+        };
+        rows += frame
+            .into_data()
+            .map_or(0, |d| d.split(|b| *b == b'\n').count() - 1);
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
+    assert!(failed, "the response ends with an error");
+    assert!(rows < 2_601, "{rows} rows");
+
+    // The SQLite pool has one connection, so this only succeeds once it is free.
+    let count = tokio::time::timeout(Duration::from_secs(2), posts::Entity::find().count(&db.db))
+        .await
+        .expect("the export released its connection")
+        .unwrap();
+    assert_eq!(count, 2_600);
+}

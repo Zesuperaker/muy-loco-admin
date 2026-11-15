@@ -634,7 +634,8 @@ mod tests {
         }
     }
 
-    /// Whether `rustfmt` can run here; CI's test job installs none.
+    /// Whether `rustfmt` can run here. CI installs it, so there the tests
+    /// that need it must run.
     fn have_rustfmt() -> bool {
         Command::new("rustfmt")
             .arg("--version")
@@ -780,6 +781,10 @@ mod tests {
     #[test]
     fn rustfmt_formats_what_it_cannot_write_in_its_layout() {
         if !have_rustfmt() {
+            assert!(
+                std::env::var_os("CI").is_none(),
+                "CI must install rustfmt: without it this test checks nothing"
+            );
             return;
         }
         // One short chain collapses onto one line, and a long `register`

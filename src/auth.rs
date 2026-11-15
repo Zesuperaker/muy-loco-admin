@@ -357,8 +357,9 @@ mod jwt {
         /// `access` lists the columns `allow` reads, such as `is_admin`.
         /// Users with full access can then manage roles and assign them; only
         /// they may change `role` and `access`, so a user with a role cannot
-        /// hand out access. A role that can edit users can still change their
-        /// other columns, such as a full admin's email.
+        /// hand out access directly. A role that can edit users can still
+        /// change their other columns, and through a full admin's `pid` or
+        /// email gain full access: see [Roles](crate#roles).
         ///
         /// ```rust,ignore
         /// JwtAuth::<users::Model>::new(|user| user.is_admin == Some(true))

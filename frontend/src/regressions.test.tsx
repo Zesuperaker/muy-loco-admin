@@ -518,3 +518,35 @@ describe("a rejected form", () => {
     expect(title).not.toHaveAttribute("aria-invalid");
   });
 });
+
+describe("a save that fails without naming a field", () => {
+  it("leaves no field marked from the attempt before", async () => {
+    let online = true;
+    mockFetch(
+      baseRoutes({
+        "GET /admin/api/models/posts/records/7": { body: { record: postRecord(7), labels: {} } },
+        "PATCH /admin/api/models/posts/records/7": () => {
+          if (!online) throw new TypeError("Failed to fetch");
+          return {
+            status: 422,
+            body: { error: "some fields are invalid", fields: { title: ["title is taken"] } },
+          };
+        },
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp("/admin/models/posts/records/7");
+    await screen.findByRole("heading", { name: "Post 7" });
+    const title = screen.getByLabelText("Title");
+    await user.type(title, "!");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(title).toHaveAttribute("aria-invalid", "true"));
+
+    online = false;
+    await user.type(title, "?");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Failed to fetch");
+    expect(title).not.toHaveAttribute("aria-invalid");
+    expect(screen.queryByText("title is taken")).not.toBeInTheDocument();
+  });
+});

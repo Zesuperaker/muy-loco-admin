@@ -180,7 +180,7 @@
 //! | [`Admin::path`] | `/admin`; letters, digits, `-`, `_`, `.` and `~` between single slashes |
 //! | [`Admin::site_url`] | `/` |
 //! | [`Admin::export_idle_timeout`] | 60 s; a CSV download that stalls this long is stopped and its transaction rolled back |
-//! | [`Admin::export_timeout`] | 10 min; a CSV download that takes longer in all is stopped too, so a slow client cannot keep a database connection |
+//! | [`Admin::export_timeout`] | 10 min; a CSV download that takes longer in all is stopped too, so a slow client cannot keep a database connection for longer |
 //!
 //! The UI's title is always "Muy Loco Admin".
 //!
@@ -300,6 +300,9 @@
 //! ```rust,ignore
 //! loco_rs::auth::session_store::sign_out_everywhere(&ctx, &user.pid.to_string()).await?;
 //! ```
+//!
+//! That ends sessions only. A token issued before the change is still accepted, by the admin
+//! too, until it expires, so keep `auth.jwt.expiration` short.
 //!
 //! See [Deploying to production](#deploying-to-production) for the settings to use.
 //!

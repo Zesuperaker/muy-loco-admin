@@ -43,7 +43,9 @@ jobs:
       - name: The package contains the built UI
         run: |
           packaged="$(cargo package --locked --list)"
-          test -n "$(git ls-files frontend/dist/index.html 'frontend/dist/assets/*.js' 'frontend/dist/assets/*.css')"
+          for built in frontend/dist/index.html 'frontend/dist/assets/*.js' 'frontend/dist/assets/*.css'; do
+            test -n "$(git ls-files "$built")" || { echo "::error::no $built is committed"; exit 1; }
+          done
           for file in $(git ls-files frontend/dist); do
             if ! grep -qxF "$file" <<<"$packaged"; then
               echo "::error::$file is committed but not in the published package"

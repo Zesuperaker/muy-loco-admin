@@ -725,18 +725,45 @@ where
             .unwrap_or_else(|| format!("#{key}"))
     }
 
-    fn key_condition(&self, key: &str) -> AdminResult<Condition> {
+    /// The primary-key values `key` names; a key that cannot name a record
+    /// is not found.
+    fn key_values(&self, key: &str) -> AdminResult<Vec<Value>> {
         let parts = decode_key(key);
         if parts.len() != self.pk.len() {
             return Err(AdminError::NotFound);
         }
-        let mut cond = Condition::all();
-        for (col, part) in self.pk.iter().zip(parts) {
-            let value = convert::<E::ActiveModel>(*col, &Json::String(part))
-                .map_err(|_| AdminError::NotFound)?;
-            cond = cond.add(col.eq(value));
+        self.pk
+            .iter()
+            .zip(parts)
+            .map(|(col, part)| {
+                convert::<E::ActiveModel>(*col, &Json::String(part))
+                    .map_err(|_| AdminError::NotFound)
+            })
+            .collect()
+    }
+
+    fn key_condition(&self, key: &str) -> AdminResult<Condition> {
+        let values = self.key_values(key)?;
+        Ok(self
+            .pk
+            .iter()
+            .zip(values)
+            .fold(Condition::all(), |cond, (col, value)| {
+                cond.add(col.eq(value))
+            }))
+    }
+
+    /// `keys` without those naming a record an earlier one names: the same
+    /// key again, or another spelling of it (`7` and `07`).
+    fn distinct<'a>(&self, keys: &'a [String]) -> AdminResult<Vec<&'a String>> {
+        let mut seen = HashSet::new();
+        let mut distinct = Vec::with_capacity(keys.len());
+        for key in keys {
+            if seen.insert(encode_key(&self.key_values(key)?)) {
+                distinct.push(key);
+            }
         }
-        Ok(cond)
+        Ok(distinct)
     }
 
     async fn find<C: ConnectionTrait>(&self, db: &C, key: &str) -> AdminResult<E::Model> {
@@ -745,24 +772,6 @@ where
             .one(db)
             .await?
             .ok_or(AdminError::NotFound)
-    }
-
-    /// The records with `keys`, each once: a key sent twice, or spelled two
-    /// ways (`7` and `07`), selects its record once.
-    async fn find_all<C: ConnectionTrait>(
-        &self,
-        db: &C,
-        keys: &[String],
-    ) -> AdminResult<Vec<E::Model>> {
-        let mut seen = HashSet::new();
-        let mut models = Vec::with_capacity(keys.len());
-        for key in keys {
-            let model = self.find(db, key).await?;
-            if seen.insert(self.key(&model)) {
-                models.push(model);
-            }
-        }
-        Ok(models)
     }
 
     /// Whether `params` narrows the list down.
@@ -1302,13 +1311,16 @@ where
 
     async fn delete(&self, db: &DatabaseConnection, keys: &[String]) -> AdminResult<u64> {
         let txn = db.begin().await?;
-        let models = self.find_all(&txn, keys).await?;
-        let deleted = models.len() as u64;
-        for model in models {
+        // Each record is read just before it is deleted, so its hooks see
+        // what deleting the ones before it changed, and one they removed
+        // fails the request, as a missing record does.
+        let keys = self.distinct(keys)?;
+        for key in &keys {
+            let model = self.find(&txn, key).await?;
             model.into_active_model().delete(&txn).await?;
         }
         txn.commit().await?;
-        Ok(deleted)
+        Ok(keys.len() as u64)
     }
 
     async fn export(
@@ -1414,7 +1426,10 @@ where
             .iter()
             .find(|a| a.name == name)
             .ok_or(AdminError::NotFound)?;
-        let models = self.find_all(&ctx.db, keys).await?;
+        let mut models = Vec::with_capacity(keys.len());
+        for key in self.distinct(keys)? {
+            models.push(self.find(&ctx.db, key).await?);
+        }
         (action.handler)(ctx.clone(), models)
             .await
             .map_err(|err| action_error(name, err))

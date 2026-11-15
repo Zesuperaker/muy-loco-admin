@@ -101,7 +101,9 @@ function RecordForm({
       }
     },
     onError: (err) => {
-      if (err instanceof ApiError) setErrors(err.fields);
+      // A failure that names no fields, such as a lost connection, leaves
+      // none marked from an earlier attempt.
+      setErrors(err instanceof ApiError ? err.fields : {});
       rejected.current = true;
     },
   });
@@ -137,7 +139,9 @@ function RecordForm({
     const clientErrors: Record<string, string[]> = {};
     for (const field of fields) {
       if (!editable(field)) continue;
-      const input = event.currentTarget.elements.namedItem(field.name);
+      // By id: an input named after a form property, such as `elements`,
+      // would shadow it on the form.
+      const input = document.getElementById(`field-${field.name}`);
       if (
         PARSED_BY_BROWSER.includes(field.kind) &&
         input instanceof HTMLInputElement &&

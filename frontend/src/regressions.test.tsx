@@ -351,6 +351,11 @@ describe("forms opened from the cache", () => {
   });
 });
 
+/** What a browser tells a form about an input whose text it cannot read; jsdom never does. */
+function setUnreadable(input: HTMLElement, badInput: boolean) {
+  Object.defineProperty(input, "validity", { value: { badInput }, configurable: true });
+}
+
 describe("input the browser cannot read", () => {
   it("is refused instead of saved as no value", async () => {
     const { calls } = mockFetch(
@@ -364,19 +369,27 @@ describe("input the browser cannot read", () => {
     renderApp("/admin/models/posts/records/7");
     await screen.findByRole("heading", { name: "Post 7" });
 
-    await user.clear(screen.getByLabelText("Rating"));
-    await user.type(screen.getByLabelText("Rating"), "1e");
+    // A number input, so the browser reads `1,5` where that is how numbers
+    // are written. It reports `1e` as empty and its text as bad.
+    const rating = screen.getByLabelText("Rating");
+    expect(rating).toHaveAttribute("type", "number");
+    await user.clear(rating);
+    await user.type(rating, "1e");
+    setUnreadable(rating, true);
     await user.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByText("must be a number")).toBeInTheDocument();
+    expect(rating).toHaveFocus();
 
-    // Half a date: the browser reports the input as empty and its text as bad.
-    await user.clear(screen.getByLabelText("Rating"));
-    await user.type(screen.getByLabelText("Rating"), "3.5");
+    // Half a date is reported the same way.
+    setUnreadable(rating, false);
+    await user.clear(rating);
+    await user.type(rating, "3.5");
     const date = screen.getByLabelText("Published on");
     fireEvent.change(date, { target: { value: "" } });
-    Object.defineProperty(date, "validity", { value: { badInput: true } });
+    setUnreadable(date, true);
     await user.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByText("is incomplete or not valid")).toBeInTheDocument();
+    expect(screen.queryByText("must be a number")).not.toBeInTheDocument();
     expect(calls.filter((c) => c.method === "PATCH")).toHaveLength(0);
   });
 });

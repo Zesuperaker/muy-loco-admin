@@ -98,7 +98,8 @@ describe("float input", () => {
   });
 
   it("refuses a comma elsewhere, where it may group thousands", () => {
-    for (const language of ["en-US", ""]) {
+    // `en_US` is not a language tag `Intl` reads; it must not stop the save.
+    for (const language of ["en-US", "", "en_US"]) {
       browserIn(language);
       expect(fromInput(float, "1.5")).toBe(1.5);
       for (const text of ["1,5", "1,234", "1,234.5"]) {

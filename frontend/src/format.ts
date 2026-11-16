@@ -60,8 +60,13 @@ export class InputError extends Error {}
 
 /** Whether the browser's language writes decimals with a comma (`1,5`), as German does. */
 function writesDecimalComma(): boolean {
-  const parts = new Intl.NumberFormat(navigator.language || undefined).formatToParts(1.5);
-  return parts.some((part) => part.type === "decimal" && part.value === ",");
+  try {
+    const parts = new Intl.NumberFormat(navigator.language || undefined).formatToParts(1.5);
+    return parts.some((part) => part.type === "decimal" && part.value === ",");
+  } catch {
+    // A language tag `Intl` does not know must not stop a number being read.
+    return false;
+  }
 }
 
 /** Convert an input's text into the JSON sent to the API. */

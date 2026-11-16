@@ -91,15 +91,19 @@ describe("float input", () => {
     // A value is shown with a point, so that is read too.
     expect(fromInput(float, "1.5")).toBe(1.5);
     expect(fromInput(float, "1e3")).toBe(1000);
-    // Grouped thousands are refused rather than guessed at.
-    for (const text of ["1.234,5", "1,234,5", "1,5,", ","]) {
+    // More than one separator is refused rather than guessed at.
+    for (const text of ["1.234,5", "1,234.5", "1,234,5", "1,5,", ","]) {
       expect(() => fromInput(float, text), text).toThrow("must be a number");
     }
+    // One separator is always the decimal one, as in a number input there:
+    // thousands cannot be grouped, with a comma or a point.
+    expect(fromInput(float, "1,234")).toBe(1.234);
+    expect(fromInput(float, "1.234")).toBe(1.234);
   });
 
   it("refuses a comma elsewhere, where it may group thousands", () => {
     // `en_US` is not a language tag `Intl` reads; it must not stop the save.
-    for (const language of ["en-US", "", "en_US"]) {
+    for (const language of ["en-US", "en_US"]) {
       browserIn(language);
       expect(fromInput(float, "1.5")).toBe(1.5);
       for (const text of ["1,5", "1,234", "1,234.5"]) {

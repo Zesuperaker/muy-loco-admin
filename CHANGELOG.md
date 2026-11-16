@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.3.1](https://github.com/Zesuperaker/muy-loco-admin/compare/v0.3.0...v0.3.1) (2026-11-16)
+
+
+### Bug Fixes
+
+* **api:** handle a record selected twice once in bulk delete and custom actions, instead of failing with 404 ([2b35d14](https://github.com/Zesuperaker/muy-loco-admin/commit/2b35d14134cbdbc956edb26a386dc69577627724))
+* **api:** show a foreign key to a column its model hides as a plain field, instead of failing the list and the record with 400 ([2b35d14](https://github.com/Zesuperaker/muy-loco-admin/commit/2b35d14134cbdbc956edb26a386dc69577627724))
+* **export:** stop a CSV export after Admin::export_timeout in all (10 minutes by default), so a slow client cannot keep a database connection ([2b35d14](https://github.com/Zesuperaker/muy-loco-admin/commit/2b35d14134cbdbc956edb26a386dc69577627724))
+* **ui:** forms opened from the cache follow the fresh record or role when it arrives, and a role save sends only what was edited ([2b35d14](https://github.com/Zesuperaker/muy-loco-admin/commit/2b35d14134cbdbc956edb26a386dc69577627724))
+* **ui:** keep integers beyond 2^53 inside JSON fields through the query cache ([2b35d14](https://github.com/Zesuperaker/muy-loco-admin/commit/2b35d14134cbdbc956edb26a386dc69577627724))
+* **ui:** list filters keep the keyboard focus, and filters the model does not list are shown and can be cleared ([2b35d14](https://github.com/Zesuperaker/muy-loco-admin/commit/2b35d14134cbdbc956edb26a386dc69577627724))
+* **ui:** mark and describe rejected fields for assistive technology, and reset the page title on pages without one ([2b35d14](https://github.com/Zesuperaker/muy-loco-admin/commit/2b35d14134cbdbc956edb26a386dc69577627724))
+* **ui:** refuse half-typed dates and unreadable numbers instead of saving them as empty ([2b35d14](https://github.com/Zesuperaker/muy-loco-admin/commit/2b35d14134cbdbc956edb26a386dc69577627724))
+
 ## [0.3.0](https://github.com/Zesuperaker/muy-loco-admin/compare/v0.2.0...v0.3.0) (2026-11-11)
 
 

@@ -12,7 +12,7 @@ use http_body_util::BodyExt;
 use muy_loco_admin::{Admin, AllowAll};
 use sea_orm::{
     ColumnTrait, ConnectionTrait, DatabaseConnection, DbBackend, EntityTrait, PaginatorTrait,
-    QueryFilter, Set, Statement,
+    QueryFilter, Set, Statement, TransactionTrait,
     prelude::{ChronoUtc, Decimal},
 };
 use tower::ServiceExt;
@@ -325,4 +325,31 @@ async fn a_download_that_takes_too_long_is_stopped() {
         .expect("the export released its connection")
         .unwrap();
     assert_eq!(count, 2_600);
+}
+
+#[tokio::test]
+async fn the_time_limit_covers_waiting_for_a_connection() {
+    if is_postgres() {
+        // Its pool has connections to spare; SQLite's has one.
+        return;
+    }
+    let (db, ctx) = setup().await;
+    let router = Admin::new(AllowAll)
+        .model::<posts::Entity>()
+        .export_timeout(Duration::from_millis(200))
+        .router(&ctx)
+        .await
+        .unwrap();
+
+    // The pool's only connection is taken, so the export cannot start.
+    let held = db.db.begin().await.unwrap();
+    let request = Request::get("/api/models/posts/export")
+        .body(Body::empty())
+        .unwrap();
+    let res = tokio::time::timeout(Duration::from_secs(10), router.clone().oneshot(request))
+        .await
+        .expect("the export gives up at its time limit, not the pool's")
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    held.rollback().await.unwrap();
 }

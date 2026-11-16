@@ -23,7 +23,7 @@ use futures_util::{StreamExt, stream};
 use loco_rs::{app::AppContext, auth::session::Session};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value as JsonValue};
-use tokio::time::{Instant, timeout};
+use tokio::time::{Instant, timeout, timeout_at};
 
 use crate::{
     auth::{AdminAuth, AdminUser, LoginMethod, UserRoles},
@@ -730,9 +730,18 @@ async fn export(
     let model = state.authorize(&access, &name, Operation::Export)?;
     let params = ListParams::from_query(&query)?;
     let idle = state.0.export_idle_timeout;
-    let csv = Arc::clone(&model.resource)
-        .export(&state.0.ctx.db, &params, idle.saturating_mul(2))
-        .await?;
+    let limit = state.0.export_timeout;
+    // The limit is on the whole export, from waiting for a database
+    // connection on. One too long to add to the clock is no limit.
+    let deadline = Instant::now().checked_add(limit);
+    let starting =
+        Arc::clone(&model.resource).export(&state.0.ctx.db, &params, idle.saturating_mul(2));
+    let csv = match deadline {
+        Some(deadline) => timeout_at(deadline, starting).await.map_err(|_| {
+            AdminError::Internal(format!("CSV export did not start within {limit:?}"))
+        })??,
+        None => starting.await?,
+    };
     let filename = format!(
         "attachment; filename=\"{}.csv\"",
         model.meta.name.replace('"', "")
@@ -747,7 +756,7 @@ async fn export(
             ),
             (header::CONTENT_DISPOSITION, disposition),
         ],
-        spawn_export(csv, idle, state.0.export_timeout),
+        spawn_export(csv, idle, deadline),
     )
         .into_response())
 }
@@ -771,6 +780,11 @@ async fn within<F: Future>(
         return timeout(idle, future).await.map_err(|_| Stopped::Idle);
     };
     let left = deadline.saturating_duration_since(Instant::now());
+    // `timeout` polls the future before its timer, so on its own it would
+    // let work that is ready through after the deadline.
+    if left.is_zero() {
+        return Err(Stopped::Late);
+    }
     match timeout(idle.min(left), future).await {
         Ok(output) => Ok(output),
         Err(_) if left <= idle => Err(Stopped::Late),
@@ -783,19 +797,17 @@ async fn within<F: Future>(
 /// A stalled download stops the server from reading the response body, so a
 /// timeout inside the body would never fire. Here the task waits at most
 /// `idle` for the database to produce a chunk and for the client to take it,
-/// and at most `limit` in all, so a client that reads just fast enough cannot
+/// and until `deadline` in all, so a client that reads just fast enough cannot
 /// keep the export's connection either; otherwise it stops, which rolls the
 /// export's transaction back and frees its connection. A response that ends
 /// early is aborted with an error, so the client never mistakes it for a
 /// complete file.
-fn spawn_export(mut csv: CsvStream, idle: Duration, limit: Duration) -> Body {
+fn spawn_export(mut csv: CsvStream, idle: Duration, deadline: Option<Instant>) -> Body {
     let (tx, rx) = tokio::sync::mpsc::channel::<Bytes>(1);
     let finished = Arc::new(AtomicBool::new(false));
     let done = Arc::clone(&finished);
-    // A limit too long to add to the clock is no limit.
-    let deadline = Instant::now().checked_add(limit);
     tokio::spawn(async move {
-        let late = || tracing::warn!(?limit, "CSV export stopped: it took too long");
+        let late = || tracing::warn!("CSV export stopped: it took longer than the export timeout");
         loop {
             let chunk = match within(idle, deadline, csv.next()).await {
                 Ok(Some(Ok(chunk))) => chunk,
@@ -939,4 +951,39 @@ async fn delete_role(
     let users = state.role_admin(&access)?;
     roles::delete(&state.0.ctx.db, users, role_id(&id)?).await?;
     Ok(Json(DeleteResponse { deleted: 1 }))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::future::{pending, ready};
+
+    use super::*;
+
+    #[tokio::test]
+    async fn export_steps_stop_when_idle_or_past_the_deadline() {
+        let idle = Duration::from_millis(20);
+        let ahead = Instant::now().checked_add(Duration::from_mins(1));
+        assert!(matches!(within(idle, None, ready(1)).await, Ok(1)));
+        assert!(matches!(within(idle, ahead, ready(1)).await, Ok(1)));
+        assert!(matches!(
+            within(idle, None, pending::<()>()).await,
+            Err(Stopped::Idle)
+        ));
+        assert!(matches!(
+            within(idle, ahead, pending::<()>()).await,
+            Err(Stopped::Idle)
+        ));
+
+        let soon = Instant::now().checked_add(idle);
+        let patient = Duration::from_mins(1);
+        assert!(matches!(
+            within(patient, soon, pending::<()>()).await,
+            Err(Stopped::Late)
+        ));
+        // Past the deadline, even a step that is ready is refused.
+        assert!(matches!(
+            within(patient, soon, ready(1)).await,
+            Err(Stopped::Late)
+        ));
+    }
 }

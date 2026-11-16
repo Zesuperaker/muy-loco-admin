@@ -49,8 +49,10 @@ cargo test
 git checkout Cargo.toml Cargo.lock                          # do not commit either
 ```
 
-If the floor does not resolve, a floor in `Cargo.toml` is lower than another dependency allows:
-raise it to the version the error names.
+If the floor does not resolve, a floor in `Cargo.toml` is lower than another dependency allows.
+Restore the two files with the last line, raise the floor to the version the error names, and
+stage it with `git add Cargo.toml` before running the block again: the checkout restores the
+files from the index, so it keeps a staged floor and drops an unstaged one.
 
 The UI's types for API requests and responses come from the Rust types that define them, never
 written by hand: derive `ts_rs::TS` on them in test builds, and list new top-level request or

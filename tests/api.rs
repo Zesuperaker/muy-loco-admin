@@ -945,6 +945,69 @@ async fn a_foreign_key_to_a_hidden_column_is_a_plain_field() {
     assert_eq!(res.status, 400, "the hidden column cannot be looked up");
 }
 
+/// A table whose key is a decimal, which has more than one spelling.
+mod rates {
+    use sea_orm::entity::prelude::*;
+
+    #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
+    #[sea_orm(table_name = "rates")]
+    pub struct Model {
+        #[sea_orm(
+            primary_key,
+            auto_increment = false,
+            column_type = "Decimal(Some((10, 2)))"
+        )]
+        pub rate: Decimal,
+        pub label: String,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
+#[tokio::test]
+async fn two_spellings_of_a_key_select_one_record() {
+    let (db, ctx) = setup().await;
+    let schema = Schema::new(db.db.get_database_backend());
+    db.db
+        .execute(&schema.create_table_from_entity(rates::Entity))
+        .await
+        .unwrap();
+    for (rate, label) in [(700, "seven"), (850, "eight and a half")] {
+        rates::ActiveModel {
+            rate: Set(sea_orm::prelude::Decimal::new(rate, 2)),
+            label: Set(label.into()),
+        }
+        .insert(&db.db)
+        .await
+        .unwrap();
+    }
+    let router = Admin::new(AllowAll)
+        .register(ModelAdmin::<rates::Entity>::new().action(
+            "count",
+            "Count",
+            |_, rates| async move { Ok(format!("{} rates", rates.len())) },
+        ))
+        .router(&ctx)
+        .await
+        .unwrap();
+    let client = Client::new(router);
+
+    let keys = json!({"keys": ["7.0", "7.00", "8.5", "7"]});
+    let res = client
+        .post("/api/models/rates/actions/count", keys.clone())
+        .await;
+    assert_eq!(res.status, 200, "{}", res.text());
+    assert_eq!(res.json()["message"], "2 rates");
+
+    let res = client.post("/api/models/rates/bulk-delete", keys).await;
+    assert_eq!(res.status, 200, "{}", res.text());
+    assert_eq!(res.json(), json!({"deleted": 2}));
+    assert_eq!(count::<rates::Entity>(&db.db).await, 0);
+}
+
 #[tokio::test]
 async fn a_record_selected_twice_is_handled_once() {
     let (db, _ctx, client) = client().await;

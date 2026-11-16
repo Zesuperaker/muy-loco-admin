@@ -753,17 +753,28 @@ where
             }))
     }
 
-    /// `keys` without those naming a record an earlier one names: the same
-    /// key again, or another spelling of it (`7` and `07`).
-    fn distinct<'a>(&self, keys: &'a [String]) -> AdminResult<Vec<&'a String>> {
-        let mut seen = HashSet::new();
-        let mut distinct = Vec::with_capacity(keys.len());
+    /// The records with `keys`, each once: a key sent twice, or spelled two
+    /// ways, selects its record once. Records are told apart by the key the
+    /// database returns, since it decides which spellings are one key: `7`
+    /// and `07`, the decimals `7.0` and `7.00`, one instant in two offsets.
+    async fn find_all<C: ConnectionTrait>(
+        &self,
+        db: &C,
+        keys: &[String],
+    ) -> AdminResult<Vec<E::Model>> {
+        let mut asked = HashSet::new();
+        let mut found = HashSet::new();
+        let mut models = Vec::with_capacity(keys.len());
         for key in keys {
-            if seen.insert(encode_key(&self.key_values(key)?)) {
-                distinct.push(key);
+            if !asked.insert(key) {
+                continue;
+            }
+            let model = self.find(db, key).await?;
+            if found.insert(self.key(&model)) {
+                models.push(model);
             }
         }
-        Ok(distinct)
+        Ok(models)
     }
 
     async fn find<C: ConnectionTrait>(&self, db: &C, key: &str) -> AdminResult<E::Model> {
@@ -1311,16 +1322,26 @@ where
 
     async fn delete(&self, db: &DatabaseConnection, keys: &[String]) -> AdminResult<u64> {
         let txn = db.begin().await?;
-        // Each record is read just before it is deleted, so its hooks see
-        // what deleting the ones before it changed, and one they removed
-        // fails the request, as a missing record does.
-        let keys = self.distinct(keys)?;
-        for key in &keys {
-            let model = self.find(&txn, key).await?;
+        let models = self.find_all(&txn, keys).await?;
+        let deleted = models.len() as u64;
+        for (index, mut model) in models.into_iter().enumerate() {
+            if index > 0 {
+                // Read again: deleting the records before it may have changed
+                // it, which its hooks should see, or removed it, which fails
+                // the request as a missing record does.
+                let key = self.pk.iter().fold(Condition::all(), |key, col| {
+                    key.add(col.eq(model.get(*col)))
+                });
+                model = E::find()
+                    .filter(key)
+                    .one(&txn)
+                    .await?
+                    .ok_or(AdminError::NotFound)?;
+            }
             model.into_active_model().delete(&txn).await?;
         }
         txn.commit().await?;
-        Ok(keys.len() as u64)
+        Ok(deleted)
     }
 
     async fn export(
@@ -1426,10 +1447,7 @@ where
             .iter()
             .find(|a| a.name == name)
             .ok_or(AdminError::NotFound)?;
-        let mut models = Vec::with_capacity(keys.len());
-        for key in self.distinct(keys)? {
-            models.push(self.find(&ctx.db, key).await?);
-        }
+        let models = self.find_all(&ctx.db, keys).await?;
         (action.handler)(ctx.clone(), models)
             .await
             .map_err(|err| action_error(name, err))

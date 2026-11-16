@@ -30,16 +30,8 @@ function initialLabels(fields: FieldMeta[], data?: RecordResponse): Texts {
   return labels;
 }
 
-/**
- * Inputs whose browser reports text it cannot read, such as half a date or
- * the number `1e`, as empty, with what to say about it.
- */
-const PARSED_BY_BROWSER: Partial<Record<FieldMeta["kind"], string>> = {
-  float: "must be a number",
-  date: "is incomplete or not valid",
-  time: "is incomplete or not valid",
-  date_time: "is incomplete or not valid",
-};
+/** Inputs whose browser reports text it cannot read, such as half a date, as empty. */
+const PARSED_BY_BROWSER = ["date", "time", "date_time"];
 
 function RecordForm({
   model,
@@ -150,9 +142,12 @@ function RecordForm({
       // By id: an input named after a form property, such as `elements`,
       // would shadow it on the form.
       const input = document.getElementById(`field-${field.name}`);
-      const unreadable = PARSED_BY_BROWSER[field.kind];
-      if (unreadable && input instanceof HTMLInputElement && input.validity.badInput) {
-        clientErrors[field.name] = [unreadable];
+      if (
+        PARSED_BY_BROWSER.includes(field.kind) &&
+        input instanceof HTMLInputElement &&
+        input.validity.badInput
+      ) {
+        clientErrors[field.name] = ["is incomplete or not valid"];
         continue;
       }
       const text = texts[field.name] ?? "";

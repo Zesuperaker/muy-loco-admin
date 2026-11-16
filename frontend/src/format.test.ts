@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   countNote,
   formatCount,
@@ -73,6 +73,47 @@ describe("fromInput", () => {
     expect(() =>
       fromInput(field("d", { kind: "date_time", timezone: true }), "garbage"),
     ).toThrow("date and time");
+  });
+});
+
+/** Make the browser's language `language`, until the mocks are restored. */
+const browserIn = (language: string) =>
+  vi.spyOn(navigator, "language", "get").mockReturnValue(language);
+
+describe("float input", () => {
+  const float = field("f", { kind: "float" });
+  afterEach(() => vi.restoreAllMocks());
+
+  it("reads a decimal comma where the browser's language writes one", () => {
+    browserIn("de-DE");
+    expect(fromInput(float, "1,5")).toBe(1.5);
+    expect(fromInput(float, "-0,25")).toBe(-0.25);
+    // A value is shown with a point, so that is read too.
+    expect(fromInput(float, "1.5")).toBe(1.5);
+    expect(fromInput(float, "1e3")).toBe(1000);
+    // Grouped thousands are refused rather than guessed at.
+    for (const text of ["1.234,5", "1,234,5", "1,5,", ","]) {
+      expect(() => fromInput(float, text), text).toThrow("must be a number");
+    }
+  });
+
+  it("refuses a comma elsewhere, where it may group thousands", () => {
+    for (const language of ["en-US", ""]) {
+      browserIn(language);
+      expect(fromInput(float, "1.5")).toBe(1.5);
+      for (const text of ["1,5", "1,234", "1,234.5"]) {
+        expect(() => fromInput(float, text), text).toThrow("must be a number");
+      }
+    }
+  });
+
+  it("refuses what is not a decimal number", () => {
+    for (const text of ["1e", "0x10", "Infinity", "NaN", "1.2.3", "--1", "1 000"]) {
+      expect(() => fromInput(float, text), text).toThrow("must be a number");
+    }
+    expect(fromInput(float, " .5 ")).toBe(0.5);
+    expect(fromInput(float, "+2.")).toBe(2);
+    expect(fromInput(field("f", { kind: "float", nullable: true }), "")).toBeNull();
   });
 });
 

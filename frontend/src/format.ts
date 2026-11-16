@@ -58,6 +58,12 @@ export function toInput(field: FieldMeta, value: JsonValue | undefined): string 
 
 export class InputError extends Error {}
 
+/** Whether the browser's language writes decimals with a comma (`1,5`), as German does. */
+function writesDecimalComma(): boolean {
+  const parts = new Intl.NumberFormat(navigator.language || undefined).formatToParts(1.5);
+  return parts.some((part) => part.type === "decimal" && part.value === ",");
+}
+
 /** Convert an input's text into the JSON sent to the API. */
 export function fromInput(field: FieldMeta, text: string): JsonValue {
   const trimmed = text.trim();
@@ -74,8 +80,11 @@ export function fromInput(field: FieldMeta, text: string): JsonValue {
       return Number.isSafeInteger(n) ? n : trimmed;
     }
     case "float": {
+      // Where the browser's language writes `1,5`, so may the user. Elsewhere
+      // a comma is refused, since it may be meant to group thousands.
+      const written = writesDecimalComma() ? trimmed.replace(",", ".") : trimmed;
       // Decimal notation only: `Number` would also read `0x10` and `Infinity`.
-      const n = /^[-+]?(\d+\.?\d*|\.\d+)(e[-+]?\d+)?$/i.test(trimmed) ? Number(trimmed) : NaN;
+      const n = /^[-+]?(\d+\.?\d*|\.\d+)(e[-+]?\d+)?$/i.test(written) ? Number(written) : NaN;
       if (!Number.isFinite(n)) throw new InputError("must be a number");
       return n;
     }

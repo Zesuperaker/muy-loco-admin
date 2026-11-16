@@ -121,11 +121,13 @@ export function FieldInput({
         <input {...common} inputMode="numeric" value={value} onChange={(e) => onChange(e.target.value)} />
       );
     case "float":
-      // A number input, so the browser reads the number as the user's locale
-      // writes it (`1,5`). It reports text it cannot read, such as `1e`, as
-      // empty: the form checks for that rather than save no value.
+      // Text, not `type="number"`: a number input reports text it cannot
+      // read, such as `1e`, as empty, which would save as no value, drops
+      // characters it does not accept (`1,5` becomes `15` in an English
+      // browser) and changes on the scroll wheel. `fromInput` reads the
+      // number, with a decimal comma where the browser's language has one.
       return (
-        <input {...common} type="number" step="any" value={value} onChange={(e) => onChange(e.target.value)} />
+        <input {...common} inputMode="decimal" value={value} onChange={(e) => onChange(e.target.value)} />
       );
     case "decimal":
       return (

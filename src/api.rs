@@ -786,6 +786,8 @@ async fn within<F: Future>(
         return Err(Stopped::Late);
     }
     match timeout(idle.min(left), future).await {
+        // A step can also run past the deadline in the poll that finishes it.
+        Ok(_) if Instant::now() >= deadline => Err(Stopped::Late),
         Ok(output) => Ok(output),
         Err(_) if left <= idle => Err(Stopped::Late),
         Err(_) => Err(Stopped::Idle),
@@ -983,6 +985,16 @@ mod tests {
         // Past the deadline, even a step that is ready is refused.
         assert!(matches!(
             within(patient, soon, ready(1)).await,
+            Err(Stopped::Late)
+        ));
+        // So is one that only finishes after it.
+        let soon = Instant::now().checked_add(idle);
+        let slow = async {
+            std::thread::sleep(idle * 2);
+            1
+        };
+        assert!(matches!(
+            within(patient, soon, slow).await,
             Err(Stopped::Late)
         ));
     }

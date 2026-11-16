@@ -9,6 +9,7 @@ import {
   grantsAnything,
   offers,
   plainIdWarnings,
+  samePermissions,
   summary,
   toggleAction,
   toggleOperation,
@@ -160,11 +161,28 @@ function RoleForm({ models, role }: { models: ModelMeta[]; role?: RoleWithUsers 
   const [name, setName] = useState(role?.name ?? "");
   const [permissions, setPermissions] = useState<Permissions>(role?.permissions ?? {});
   const [errors, setErrors] = useState<Record<string, string[]>>({});
+  const renamed = name !== (role?.name ?? "");
+  const regranted = !samePermissions(permissions, role?.permissions ?? {});
+  // The role changed on the server since the form took its values: it was
+  // opened from the cache and the fresh copy has arrived. What was left as
+  // it was follows it; what was edited is kept.
+  const [synced, setSynced] = useState(role);
+  if (role !== synced) {
+    setSynced(role);
+    if (name === (synced?.name ?? "")) setName(role?.name ?? "");
+    if (samePermissions(permissions, synced?.permissions ?? {})) {
+      setPermissions(role?.permissions ?? {});
+    }
+  }
 
   const save = useMutation({
     mutationFn: () => {
-      const input = { name, permissions };
-      return role ? api.updateRole(role.id, input) : api.createRole(input);
+      if (!role) return api.createRole({ name, permissions });
+      // Only what was edited: the rest may have changed on the server since.
+      return api.updateRole(role.id, {
+        ...(renamed && { name }),
+        ...(regranted && { permissions }),
+      });
     },
     onSuccess: (res) => {
       setErrors({});

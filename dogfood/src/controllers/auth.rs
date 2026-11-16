@@ -125,6 +125,15 @@ async fn reset(State(ctx): State<AppContext>, Json(params): Json<ResetParams>) -
 
         return format::json(());
     };
+    // The user's sessions end, the admin's included, since it shares the
+    // app's session: one opened with the old password, or stolen, no longer
+    // signs in. The `cookie` store cannot end a session, and a token issued
+    // before the reset is still accepted until it expires. They end first:
+    // the reset uses up its token, so if ending them failed after it, a
+    // retry would find no token and leave them open.
+    if loco_rs::auth::session_store::is_server_side(&ctx) {
+        loco_rs::auth::session_store::sign_out_everywhere(&ctx, &user.pid.to_string()).await?;
+    }
     user.into_active_model()
         .reset_password(&ctx.db, &params.password)
         .await?;

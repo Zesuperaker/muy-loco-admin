@@ -699,8 +699,13 @@ where
         convert::<E::ActiveModel>(column.col, &normalize(column.kind, input))
     }
 
+    /// The record's key as the API writes it.
+    fn key(&self, model: &E::Model) -> String {
+        encode_key(&self.pk.iter().map(|c| model.get(*c)).collect::<Vec<_>>())
+    }
+
     fn record(&self, model: &E::Model) -> Record {
-        let key = encode_key(&self.pk.iter().map(|c| model.get(*c)).collect::<Vec<_>>());
+        let key = self.key(model);
         let values = self
             .columns
             .iter()
@@ -720,18 +725,56 @@ where
             .unwrap_or_else(|| format!("#{key}"))
     }
 
-    fn key_condition(&self, key: &str) -> AdminResult<Condition> {
+    /// The primary-key values `key` names; a key that cannot name a record
+    /// is not found.
+    fn key_values(&self, key: &str) -> AdminResult<Vec<Value>> {
         let parts = decode_key(key);
         if parts.len() != self.pk.len() {
             return Err(AdminError::NotFound);
         }
-        let mut cond = Condition::all();
-        for (col, part) in self.pk.iter().zip(parts) {
-            let value = convert::<E::ActiveModel>(*col, &Json::String(part))
-                .map_err(|_| AdminError::NotFound)?;
-            cond = cond.add(col.eq(value));
+        self.pk
+            .iter()
+            .zip(parts)
+            .map(|(col, part)| {
+                convert::<E::ActiveModel>(*col, &Json::String(part))
+                    .map_err(|_| AdminError::NotFound)
+            })
+            .collect()
+    }
+
+    fn key_condition(&self, key: &str) -> AdminResult<Condition> {
+        let values = self.key_values(key)?;
+        Ok(self
+            .pk
+            .iter()
+            .zip(values)
+            .fold(Condition::all(), |cond, (col, value)| {
+                cond.add(col.eq(value))
+            }))
+    }
+
+    /// The records with `keys`, each once: a key sent twice, or spelled two
+    /// ways, selects its record once. Records are told apart by the key the
+    /// database returns, since it decides which spellings are one key: `7`
+    /// and `07`, the decimals `7.0` and `7.00`, one instant in two offsets.
+    async fn find_all<C: ConnectionTrait>(
+        &self,
+        db: &C,
+        keys: &[String],
+    ) -> AdminResult<Vec<E::Model>> {
+        let mut asked = HashSet::new();
+        let mut found = HashSet::new();
+        let mut models = Vec::with_capacity(keys.len());
+        for key in keys {
+            if !asked.insert(key) {
+                continue;
+            }
+            let model = self.find(db, key).await?;
+            if found.insert(self.key(&model)) {
+                models.push(model);
+            }
         }
-        Ok(cond)
+        Ok(models)
     }
 
     async fn find<C: ConnectionTrait>(&self, db: &C, key: &str) -> AdminResult<E::Model> {
@@ -1279,12 +1322,26 @@ where
 
     async fn delete(&self, db: &DatabaseConnection, keys: &[String]) -> AdminResult<u64> {
         let txn = db.begin().await?;
-        for key in keys {
-            let model = self.find(&txn, key).await?;
+        let models = self.find_all(&txn, keys).await?;
+        let deleted = models.len() as u64;
+        for (index, mut model) in models.into_iter().enumerate() {
+            if index > 0 {
+                // Read again: deleting the records before it may have changed
+                // it, which its hooks should see, or removed it, which fails
+                // the request as a missing record does.
+                let key = self.pk.iter().fold(Condition::all(), |key, col| {
+                    key.add(col.eq(model.get(*col)))
+                });
+                model = E::find()
+                    .filter(key)
+                    .one(&txn)
+                    .await?
+                    .ok_or(AdminError::NotFound)?;
+            }
             model.into_active_model().delete(&txn).await?;
         }
         txn.commit().await?;
-        Ok(keys.len() as u64)
+        Ok(deleted)
     }
 
     async fn export(
@@ -1390,10 +1447,7 @@ where
             .iter()
             .find(|a| a.name == name)
             .ok_or(AdminError::NotFound)?;
-        let mut models = Vec::with_capacity(keys.len());
-        for key in keys {
-            models.push(self.find(&ctx.db, key).await?);
-        }
+        let models = self.find_all(&ctx.db, keys).await?;
         (action.handler)(ctx.clone(), models)
             .await
             .map_err(|err| action_error(name, err))

@@ -31,6 +31,7 @@ use crate::{
 
 const DEFAULT_PATH: &str = "/admin";
 const DEFAULT_EXPORT_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+const DEFAULT_EXPORT_TIMEOUT: Duration = Duration::from_mins(10);
 /// Loco middlewares the admin does not apply. `fallback` and `static` install
 /// routes instead of wrapping requests and would shadow the admin's own.
 /// `cors` would let origins the app trusts call the admin API with the
@@ -82,6 +83,7 @@ pub struct Admin {
     errors: Vec<String>,
     middlewares: MiddlewareStack,
     export_idle_timeout: Duration,
+    export_timeout: Duration,
 }
 
 /// Builds the Loco middleware stack, like `Hooks::middlewares`.
@@ -185,6 +187,7 @@ impl Admin {
             errors: Vec::new(),
             middlewares: default_middleware_stack,
             export_idle_timeout: DEFAULT_EXPORT_IDLE_TIMEOUT,
+            export_timeout: DEFAULT_EXPORT_TIMEOUT,
         }
     }
 
@@ -211,6 +214,17 @@ impl Admin {
     #[must_use]
     pub fn export_idle_timeout(mut self, timeout: Duration) -> Self {
         self.export_idle_timeout = timeout;
+        self
+    }
+
+    /// How long a CSV export may take in all before it is stopped and its
+    /// transaction rolled back, however steadily the client reads. An export
+    /// keeps a database connection until it ends, so this is how long a slow
+    /// client can hold one. Defaults to 10 minutes; raise it for exports
+    /// that take longer to download.
+    #[must_use]
+    pub fn export_timeout(mut self, timeout: Duration) -> Self {
+        self.export_timeout = timeout;
         self
     }
 
@@ -308,6 +322,14 @@ impl Admin {
                 .or_insert_with(|| meta.name.clone());
         }
 
+        // A key to a column its model hides stays a plain value: links, labels
+        // and the picker all read the column the key refers to, which the
+        // admin never sends.
+        let shows = |model: &String, column: &str| {
+            self.resources.iter().map(|r| r.meta()).any(|target| {
+                target.name == *model && target.fields.iter().any(|f| f.name == column)
+            })
+        };
         let mut metas: Vec<_> = self.resources.iter().map(|r| r.meta().clone()).collect();
         for meta in &mut metas {
             let users = user_roles.filter(|r| r.table == meta.table);
@@ -318,7 +340,10 @@ impl Admin {
                     field.relation = None;
                 }
                 if let Some(rel) = &mut field.relation {
-                    rel.model = tables.get(&rel.table).cloned();
+                    rel.model = tables
+                        .get(&rel.table)
+                        .filter(|model| shows(model, &rel.column))
+                        .cloned();
                 }
             }
         }
@@ -373,6 +398,7 @@ impl Admin {
         let state = AdminState(Arc::new(Inner {
             site_url,
             export_idle_timeout: self.export_idle_timeout,
+            export_timeout: self.export_timeout,
             base_path,
             auth: Arc::clone(&self.auth),
             roles: user_roles,

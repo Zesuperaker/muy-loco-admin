@@ -61,7 +61,7 @@
 //!
 //! A foreign key becomes a link and a searchable picker when the model it points to is
 //! registered too, and that model's records link back to the records that refer to them.
-//! Otherwise it is a plain id field.
+//! Otherwise it is a plain id field, as is a key to a column its model hides.
 //!
 //! ## Generating the model list
 //!
@@ -180,6 +180,7 @@
 //! | [`Admin::path`] | `/admin`; letters, digits, `-`, `_`, `.` and `~` between single slashes |
 //! | [`Admin::site_url`] | `/` |
 //! | [`Admin::export_idle_timeout`] | 60 s; a CSV download that stalls this long is stopped and its transaction rolled back |
+//! | [`Admin::export_timeout`] | 10 min; a CSV download that takes longer in all is stopped too, so a slow client cannot keep a database connection for longer |
 //!
 //! The UI's title is always "Muy Loco Admin".
 //!
@@ -300,6 +301,9 @@
 //! loco_rs::auth::session_store::sign_out_everywhere(&ctx, &user.pid.to_string()).await?;
 //! ```
 //!
+//! That ends sessions only. A token issued before the change is still accepted, by the admin
+//! too, until it expires, so keep `auth.jwt.expiration` short.
+//!
 //! See [Deploying to production](#deploying-to-production) for the settings to use.
 //!
 //! # Roles
@@ -348,9 +352,29 @@
 //!    ```
 //!
 //! Only admin users with full access may change those columns, so a user with a role cannot
-//! hand out access. A role that can edit users can still change their other columns, such as a
-//! full admin's email, so grant it only to people you would trust with those accounts; the role
-//! editor warns about this too.
+//! hand out access directly.
+//!
+//! <div class="warning">
+//!
+//! **A role that can edit users can still gain full access**, through the users' other columns:
+//!
+//! - `pid` is the id that tokens and sessions name a user by. Loco's starter does not make it
+//!   unique, so a user who gives a full admin's record their own `pid` may be signed in as that
+//!   admin on their next request.
+//! - A full admin's email can be changed to an address the user reads, and the password then
+//!   reset through the app.
+//!
+//! Grant Edit on the users model only to people you would trust with full access; the role
+//! editor warns about this too. Making `pid` read-only closes the first route for everyone
+//! (list the timestamps as well, since the list replaces the default):
+//!
+//! ```rust,ignore
+//! ModelAdmin::<users::Entity>::new()
+//!     .can_create(false)
+//!     .readonly_fields(["pid", "created_at", "updated_at"])
+//! ```
+//!
+//! </div>
 //!
 //! Do not register the generated `admin_roles` entity as a model; the admin refuses to start if
 //! you do. With your own [`AdminAuth`], return [`UserRoles`] from [`AdminAuth::roles`] (requests

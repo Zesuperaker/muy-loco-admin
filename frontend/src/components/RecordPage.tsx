@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { ApiError, api } from "../api";
 import { InputError, displayFull, fromInput, keyText, toInput } from "../format";
@@ -30,6 +30,9 @@ function initialLabels(fields: FieldMeta[], data?: RecordResponse): Texts {
   return labels;
 }
 
+/** Inputs whose browser reports text it cannot read, such as half a date, as empty. */
+const PARSED_BY_BROWSER = ["date", "time", "date_time"];
+
 function RecordForm({
   model,
   models,
@@ -48,6 +51,32 @@ function RecordForm({
   const [texts, setTexts] = useState<Texts>(initial);
   const [labels, setLabels] = useState<Texts>(() => initialLabels(fields, data));
   const [errors, setErrors] = useState<Record<string, string[]>>({});
+  /** A submit was just rejected, by the form or the server. */
+  const rejected = useRef(false);
+  // The record changed on the server since the form took its values: it was
+  // opened from the cache and the fresh copy has arrived, or it was fetched
+  // again. Fields left as they were follow it; edited ones keep their text.
+  const [synced, setSynced] = useState(data);
+  if (data !== synced) {
+    const next = initialTexts(fields, data);
+    const nextLabels = initialLabels(fields, data);
+    const edited = (name: string) => texts[name] !== initial[name];
+    setSynced(data);
+    setInitial(next);
+    setTexts(
+      Object.fromEntries(
+        fields.map((f) => [f.name, (edited(f.name) ? texts[f.name] : next[f.name]) ?? ""]),
+      ),
+    );
+    setLabels(
+      Object.fromEntries(
+        fields.flatMap((f) => {
+          const label = edited(f.name) ? labels[f.name] : nextLabels[f.name];
+          return label ? [[f.name, label]] : [];
+        }),
+      ),
+    );
+  }
   const canEdit = isNew ? model.capabilities.create : model.capabilities.update;
   const editable = (field: FieldMeta) =>
     canEdit && !field.readonly && (isNew || !field.primary_key);
@@ -72,8 +101,22 @@ function RecordForm({
       }
     },
     onError: (err) => {
-      if (err instanceof ApiError) setErrors(err.fields);
+      // A failure that names no fields, such as a lost connection, leaves
+      // none marked from an earlier attempt.
+      setErrors(err instanceof ApiError ? err.fields : {});
+      rejected.current = true;
     },
+  });
+
+  // Rejected fields are described on their inputs, so moving to the first
+  // one after a failed submit tells a screen reader user what to fix. Inputs
+  // are disabled while saving, so this waits for the save to end.
+  const firstInvalid = fields.find((f) => (errors[f.name] ?? []).length > 0)?.name;
+  const saving = save.isPending;
+  useEffect(() => {
+    if (!rejected.current || saving) return;
+    rejected.current = false;
+    if (firstInvalid) document.getElementById(`field-${firstInvalid}`)?.focus();
   });
 
   const remove = useMutation({
@@ -88,12 +131,25 @@ function RecordForm({
     onError: (err) => notify(err.message, "error"),
   });
 
-  const submit = (event: FormEvent) => {
+  const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    // An earlier attempt's error would outlive what it was about.
+    save.reset();
     const values: Record<string, JsonValue> = {};
     const clientErrors: Record<string, string[]> = {};
     for (const field of fields) {
       if (!editable(field)) continue;
+      // By id: an input named after a form property, such as `elements`,
+      // would shadow it on the form.
+      const input = document.getElementById(`field-${field.name}`);
+      if (
+        PARSED_BY_BROWSER.includes(field.kind) &&
+        input instanceof HTMLInputElement &&
+        input.validity.badInput
+      ) {
+        clientErrors[field.name] = ["is incomplete or not valid"];
+        continue;
+      }
       const text = texts[field.name] ?? "";
       if (isNew ? text === "" : text === initial[field.name]) continue;
       try {
@@ -104,6 +160,7 @@ function RecordForm({
     }
     if (Object.keys(clientErrors).length > 0) {
       setErrors(clientErrors);
+      rejected.current = true;
       return;
     }
     save.mutate(values);
@@ -172,11 +229,13 @@ function RecordForm({
         {fields.map((field) => {
           const fieldErrors = errors[field.name] ?? [];
           const value = data?.record.values[field.name];
+          const required = !field.nullable && field.kind !== "boolean";
+          const errorsId = `field-${field.name}-errors`;
           return (
             <div key={field.name} className="grid gap-2 px-5 py-4 sm:grid-cols-[12rem_1fr] sm:items-start">
               <div className="pt-1.5 text-sm font-medium text-slate-700">
                 <label htmlFor={`field-${field.name}`}>{field.label}</label>
-                {!field.nullable && editable(field) && field.kind !== "boolean" && (
+                {required && editable(field) && (
                   <span aria-hidden="true" className="text-rose-500">
                     {" "}
                     *
@@ -190,6 +249,11 @@ function RecordForm({
                     value={texts[field.name] ?? ""}
                     disabled={save.isPending}
                     fkLabel={labels[field.name]}
+                    aria={{
+                      "aria-required": required || undefined,
+                      "aria-invalid": fieldErrors.length > 0 || undefined,
+                      "aria-describedby": fieldErrors.length > 0 ? errorsId : undefined,
+                    }}
                     onChange={(text) => setTexts((t) => ({ ...t, [field.name]: text }))}
                     onPick={(text, label) => {
                       setTexts((t) => ({ ...t, [field.name]: text }));
@@ -203,11 +267,13 @@ function RecordForm({
                       : (labels[field.name] ?? displayFull(field, value))}
                   </output>
                 )}
-                {fieldErrors.map((message) => (
-                  <p key={message} className="text-sm text-rose-600">
-                    {message}
-                  </p>
-                ))}
+                {fieldErrors.length > 0 && (
+                  <div id={errorsId} className="text-sm text-rose-600">
+                    {fieldErrors.map((message) => (
+                      <p key={message}>{message}</p>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           );

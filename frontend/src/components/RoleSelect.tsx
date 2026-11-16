@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { api } from "../api";
+import type { ControlAria } from "./FieldInput";
 
 /** A select of the roles, for the users' role column. */
 export function RoleSelect({
@@ -10,6 +11,7 @@ export function RoleSelect({
   disabled = false,
   emptyLabel,
   children,
+  aria,
   onChange,
 }: {
   id: string;
@@ -21,6 +23,7 @@ export function RoleSelect({
   emptyLabel: string;
   /** More options after the roles. */
   children?: ReactNode;
+  aria?: ControlAria;
   onChange: (value: string) => void;
 }) {
   const roles = useQuery({ queryKey: ["roles"], queryFn: api.roles });
@@ -35,6 +38,7 @@ export function RoleSelect({
         className="input"
         value={value}
         disabled={disabled || roles.isPending}
+        {...aria}
         onChange={(e) => onChange(e.target.value)}
       >
         <option value="">{emptyLabel}</option>

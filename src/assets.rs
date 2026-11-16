@@ -70,13 +70,34 @@ pub(crate) async fn index(State(state): State<AdminState>, method: Method) -> Re
 mod tests {
     use super::*;
 
+    /// The UI is committed, so a crate built from this tree, or published
+    /// from it, must embed it: `allow_missing` would otherwise build a crate
+    /// that only serves the "has not been built" page.
+    #[test]
+    fn the_built_ui_is_embedded() {
+        let index = Dist::get("index.html").expect("frontend/dist/index.html is embedded");
+        let html = String::from_utf8_lossy(&index.data);
+        let prefix = format!("{BASE_PLACEHOLDER}/");
+        let assets: Vec<&str> = html
+            .split('"')
+            .filter_map(|part| part.strip_prefix(prefix.as_str()))
+            .collect();
+        for kind in [".js", ".css"] {
+            assert!(
+                assets.iter().any(|path| path.ends_with(kind)),
+                "index.html loads no {kind} file"
+            );
+        }
+        for path in assets {
+            assert!(Dist::get(path).is_some(), "{path} is not embedded");
+        }
+    }
+
     #[test]
     fn index_uses_the_mount_path() {
         let html = index_html("/backoffice");
         assert!(!html.contains(BASE_PLACEHOLDER));
-        if Dist::get("index.html").is_some() {
-            assert!(html.contains("/backoffice/assets/"));
-        }
+        assert!(html.contains("/backoffice/assets/"));
     }
 
     #[test]

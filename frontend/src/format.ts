@@ -74,7 +74,8 @@ export function fromInput(field: FieldMeta, text: string): JsonValue {
       return Number.isSafeInteger(n) ? n : trimmed;
     }
     case "float": {
-      const n = Number(trimmed);
+      // Decimal notation only: `Number` would also read `0x10` and `Infinity`.
+      const n = /^[-+]?(\d+\.?\d*|\.\d+)(e[-+]?\d+)?$/i.test(trimmed) ? Number(trimmed) : NaN;
       if (!Number.isFinite(n)) throw new InputError("must be a number");
       return n;
     }

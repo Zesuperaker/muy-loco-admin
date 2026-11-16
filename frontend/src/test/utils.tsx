@@ -5,6 +5,7 @@ import { MemoryRouter, useLocation } from "react-router";
 import { vi } from "vitest";
 import { App } from "../App";
 import { ToastProvider } from "../components/ui";
+import { queryClientConfig } from "../queryClient";
 import type { AdminConfig, FieldMeta, ModelMeta } from "../types";
 
 export interface Call {
@@ -190,7 +191,10 @@ export function currentLocation(): string {
 
 export function renderApp(path = "/admin") {
   const client = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    defaultOptions: {
+      queries: { ...queryClientConfig.defaultOptions?.queries, retry: false },
+      mutations: { retry: false },
+    },
   });
   return render(
     <QueryClientProvider client={client}>

@@ -8,7 +8,7 @@ use common::{
 use loco_rs::app::AppContext;
 use muy_loco_admin::{Admin, AllowAll, MAX_PER_PAGE, ModelAdmin, SortDirection};
 use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
-use sea_orm::{ActiveModelTrait, ConnectionTrait, EntityTrait, IntoActiveModel, Set};
+use sea_orm::{ActiveModelTrait, ConnectionTrait, EntityTrait, IntoActiveModel, Schema, Set};
 use serde_json::{Value, json};
 
 fn admin() -> Admin {
@@ -823,6 +823,215 @@ async fn delete_runs_hooks_in_a_transaction() {
         "at most 500 records can be selected at once"
     );
     assert_eq!(count::<posts::Entity>(&db.db).await, 1, "nothing deleted");
+}
+
+/// `orders.customer_code` refers to `customers.code`, a column other than the key.
+mod customers {
+    use sea_orm::entity::prelude::*;
+
+    #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
+    #[sea_orm(table_name = "customers")]
+    pub struct Model {
+        #[sea_orm(primary_key)]
+        pub id: i32,
+        pub name: String,
+        #[sea_orm(unique)]
+        pub code: String,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
+mod orders {
+    use sea_orm::entity::prelude::*;
+
+    #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
+    #[sea_orm(table_name = "orders")]
+    pub struct Model {
+        #[sea_orm(primary_key)]
+        pub id: i32,
+        pub customer_code: String,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {
+        #[sea_orm(
+            belongs_to = "super::customers::Entity",
+            from = "Column::CustomerCode",
+            to = "super::customers::Column::Code"
+        )]
+        Customers,
+    }
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
+#[tokio::test]
+async fn a_foreign_key_to_a_hidden_column_is_a_plain_field() {
+    let (db, ctx) = setup().await;
+    let schema = Schema::new(db.db.get_database_backend());
+    for table in [
+        schema.create_table_from_entity(customers::Entity),
+        schema.create_table_from_entity(orders::Entity),
+    ] {
+        db.db.execute(&table).await.unwrap();
+    }
+    customers::ActiveModel {
+        name: Set("Ann".into()),
+        code: Set("A1".into()),
+        ..Default::default()
+    }
+    .insert(&db.db)
+    .await
+    .unwrap();
+    let order = orders::ActiveModel {
+        customer_code: Set("A1".into()),
+        ..Default::default()
+    }
+    .insert(&db.db)
+    .await
+    .unwrap();
+    let customer_code = |schema: &Value| {
+        let orders = model(schema, "orders");
+        orders["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["name"] == "customer_code")
+            .unwrap()
+            .clone()
+    };
+
+    // Shown, the column links the two models both ways.
+    let router = Admin::new(AllowAll)
+        .model::<customers::Entity>()
+        .model::<orders::Entity>()
+        .router(&ctx)
+        .await
+        .unwrap();
+    let client = Client::new(router);
+    let schema = client.get("/api/schema").await.json();
+    assert_eq!(customer_code(&schema)["relation"]["model"], "customers");
+    assert_eq!(model(&schema, "customers")["related"][0]["model"], "orders");
+    let list = client.get("/api/models/orders/records").await;
+    assert_eq!(list.status, 200, "{}", list.text());
+    assert_eq!(list.json()["labels"]["customer_code"]["A1"], "Ann");
+
+    // Hidden, the key is a plain value: nothing reads the column it refers to.
+    let router = Admin::new(AllowAll)
+        .register(ModelAdmin::<customers::Entity>::new().hidden_fields(["code"]))
+        .model::<orders::Entity>()
+        .router(&ctx)
+        .await
+        .unwrap();
+    let client = Client::new(router);
+    let schema = client.get("/api/schema").await.json();
+    assert_eq!(customer_code(&schema)["relation"]["model"], Value::Null);
+    assert_eq!(model(&schema, "customers")["related"], json!([]));
+    let list = client.get("/api/models/orders/records").await;
+    assert_eq!(list.status, 200, "{}", list.text());
+    assert_eq!(list.json()["records"][0]["values"]["customer_code"], "A1");
+    assert_eq!(list.json()["labels"], json!({}));
+    let show = client
+        .get(&format!("/api/models/orders/records/{}", order.id))
+        .await;
+    assert_eq!(show.status, 200, "{}", show.text());
+    let res = client
+        .get("/api/models/customers/lookup?column=code&q=A")
+        .await;
+    assert_eq!(res.status, 400, "the hidden column cannot be looked up");
+}
+
+/// A table whose key is a decimal, which has more than one spelling.
+mod rates {
+    use sea_orm::entity::prelude::*;
+
+    #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
+    #[sea_orm(table_name = "rates")]
+    pub struct Model {
+        #[sea_orm(
+            primary_key,
+            auto_increment = false,
+            column_type = "Decimal(Some((10, 2)))"
+        )]
+        pub rate: Decimal,
+        pub label: String,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
+}
+
+#[tokio::test]
+async fn two_spellings_of_a_key_select_one_record() {
+    let (db, ctx) = setup().await;
+    let schema = Schema::new(db.db.get_database_backend());
+    db.db
+        .execute(&schema.create_table_from_entity(rates::Entity))
+        .await
+        .unwrap();
+    for (rate, label) in [(700, "seven"), (850, "eight and a half")] {
+        rates::ActiveModel {
+            rate: Set(sea_orm::prelude::Decimal::new(rate, 2)),
+            label: Set(label.into()),
+        }
+        .insert(&db.db)
+        .await
+        .unwrap();
+    }
+    let router = Admin::new(AllowAll)
+        .register(ModelAdmin::<rates::Entity>::new().action(
+            "count",
+            "Count",
+            |_, rates| async move { Ok(format!("{} rates", rates.len())) },
+        ))
+        .router(&ctx)
+        .await
+        .unwrap();
+    let client = Client::new(router);
+
+    let keys = json!({"keys": ["7.0", "7.00", "8.5", "7"]});
+    let res = client
+        .post("/api/models/rates/actions/count", keys.clone())
+        .await;
+    assert_eq!(res.status, 200, "{}", res.text());
+    assert_eq!(res.json()["message"], "2 rates");
+
+    let res = client.post("/api/models/rates/bulk-delete", keys).await;
+    assert_eq!(res.status, 200, "{}", res.text());
+    assert_eq!(res.json(), json!({"deleted": 2}));
+    assert_eq!(count::<rates::Entity>(&db.db).await, 0);
+}
+
+#[tokio::test]
+async fn a_record_selected_twice_is_handled_once() {
+    let (db, _ctx, client) = client().await;
+    let ann = create_user(&db.db, "ann@example.com", true).await;
+    let a = create_post(&db.db, ann.id, "first").await;
+    let b = create_post(&db.db, ann.id, "second").await;
+    create_post(&db.db, ann.id, "third").await;
+
+    // The same key twice, and the same record spelled another way.
+    let keys = json!({"keys": [a.id.to_string(), a.id.to_string(), format!("0{}", a.id)]});
+    let res = client
+        .post("/api/models/posts/actions/publish", keys.clone())
+        .await;
+    assert_eq!(res.status, 200, "{}", res.text());
+    assert_eq!(res.json()["message"], "published 1 posts");
+
+    let res = client.post("/api/models/posts/bulk-delete", keys).await;
+    assert_eq!(res.status, 200, "{}", res.text());
+    assert_eq!(res.json(), json!({"deleted": 1}));
+
+    let keys = json!({"keys": [b.id.to_string(), b.id.to_string()]});
+    let res = client.post("/api/models/posts/bulk-delete", keys).await;
+    assert_eq!(res.json(), json!({"deleted": 1}));
+    assert_eq!(count::<posts::Entity>(&db.db).await, 1);
 }
 
 #[tokio::test]

@@ -1,5 +1,6 @@
 import { type FormEvent, useState } from "react";
 import { ApiError, login } from "../api";
+import { useTitle } from "../title";
 import type { AdminConfig } from "../types";
 import { Button, Card, ErrorBanner } from "./ui";
 
@@ -12,6 +13,7 @@ export function Login({
   forbidden: boolean;
   onSignedIn: () => void;
 }) {
+  useTitle(config.title);
   const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<unknown>(null);

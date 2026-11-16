@@ -80,11 +80,9 @@ async fn embedded_assets_are_served() {
     let router = admin().after_routes(app_router(), &ctx).await.unwrap();
     let client = Client::new(router);
     let html = client.get("/admin").await.text();
-    let Some(start) = html.find("/admin/assets/") else {
-        // The UI has not been built; the placeholder page is served instead.
-        assert!(html.contains("has not been built"));
-        return;
-    };
+    let start = html
+        .find("/admin/assets/")
+        .expect("the built UI is embedded and served");
     let rest = &html[start..];
     let end = rest.find('"').unwrap();
     let res = client.get(&rest[..end]).await;

@@ -94,3 +94,7 @@ auth:
     secret: oq2p0SznwUrqEzKmwf4J
     # Token expiration time in seconds
     expiration: 604800 # 7 days
+  # Sessions live in the database, as in production, so the tests cover what
+  # ends them.
+  session:
+    store: database

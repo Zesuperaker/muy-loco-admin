@@ -12,7 +12,7 @@ use http_body_util::BodyExt;
 use muy_loco_admin::{Admin, AllowAll};
 use sea_orm::{
     ColumnTrait, ConnectionTrait, DatabaseConnection, DbBackend, EntityTrait, PaginatorTrait,
-    QueryFilter, Set, Statement,
+    QueryFilter, Set, Statement, TransactionTrait,
     prelude::{ChronoUtc, Decimal},
 };
 use tower::ServiceExt;
@@ -286,4 +286,70 @@ async fn slow_clients_within_the_limit_get_everything() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     assert_eq!(lines, 1 + 1_100);
+}
+
+#[tokio::test]
+async fn a_download_that_takes_too_long_is_stopped() {
+    let (db, ctx) = setup().await;
+    let ann = create_user(&db.db, "ann@example.com", true).await;
+    insert_posts(&db.db, ann.id, 2_600, "bulk").await;
+    // The client below never stalls for the idle timeout, so only the limit
+    // on the whole export stops it.
+    let router = Admin::new(AllowAll)
+        .model::<posts::Entity>()
+        .export_idle_timeout(Duration::from_secs(5))
+        .export_timeout(Duration::from_millis(400))
+        .router(&ctx)
+        .await
+        .unwrap();
+
+    let mut body = export_body(&router, "/api/models/posts/export").await;
+    let mut rows = 0;
+    let mut failed = false;
+    while let Some(frame) = body.frame().await {
+        let Ok(frame) = frame else {
+            failed = true;
+            break;
+        };
+        rows += frame
+            .into_data()
+            .map_or(0, |d| d.split(|b| *b == b'\n').count() - 1);
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
+    assert!(failed, "the response ends with an error");
+    assert!(rows < 2_601, "{rows} rows");
+
+    // The SQLite pool has one connection, so this only succeeds once it is free.
+    let count = tokio::time::timeout(Duration::from_secs(2), posts::Entity::find().count(&db.db))
+        .await
+        .expect("the export released its connection")
+        .unwrap();
+    assert_eq!(count, 2_600);
+}
+
+#[tokio::test]
+async fn the_time_limit_covers_waiting_for_a_connection() {
+    if is_postgres() {
+        // Its pool has connections to spare; SQLite's has one.
+        return;
+    }
+    let (db, ctx) = setup().await;
+    let router = Admin::new(AllowAll)
+        .model::<posts::Entity>()
+        .export_timeout(Duration::from_millis(200))
+        .router(&ctx)
+        .await
+        .unwrap();
+
+    // The pool's only connection is taken, so the export cannot start.
+    let held = db.db.begin().await.unwrap();
+    let request = Request::get("/api/models/posts/export")
+        .body(Body::empty())
+        .unwrap();
+    let res = tokio::time::timeout(Duration::from_secs(10), router.clone().oneshot(request))
+        .await
+        .expect("the export gives up at its time limit, not the pool's")
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    held.rollback().await.unwrap();
 }

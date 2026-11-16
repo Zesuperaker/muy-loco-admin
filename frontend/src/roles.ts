@@ -21,6 +21,19 @@ export function grantsAnything(grant: Grant | undefined): boolean {
   return OPERATIONS.some((op) => grant[op]) || grant.actions.length > 0;
 }
 
+/** Whether two sets of permissions grant the same things. */
+export function samePermissions(a: Permissions, b: Permissions): boolean {
+  return [...new Set([...Object.keys(a), ...Object.keys(b)])].every((model) => {
+    const x = { ...emptyGrant(), ...a[model] };
+    const y = { ...emptyGrant(), ...b[model] };
+    return (
+      OPERATIONS.every((op) => x[op] === y[op]) &&
+      x.actions.length === y.actions.length &&
+      x.actions.every((action) => y.actions.includes(action))
+    );
+  });
+}
+
 /** Whether the model offers `op` at all (its `ModelAdmin` settings). */
 export function offers(model: ModelMeta, op: Operation): boolean {
   return model.capabilities[op];

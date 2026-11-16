@@ -71,6 +71,42 @@ function download(blob: Blob, filename: string) {
   URL.revokeObjectURL(url);
 }
 
+/** A filter typed as text, applied on Enter or on leaving the field. */
+function TextFilter({
+  id,
+  value,
+  onChange,
+}: {
+  id: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const [text, setText] = useState(value);
+  // Follow the filter when it changes another way (Clear, Back).
+  const [applied, setApplied] = useState(value);
+  if (value !== applied) {
+    setApplied(value);
+    setText(value);
+  }
+  // Only a changed value is applied, so leaving the field keeps the page.
+  const commit = () => {
+    if (text.trim() !== value) onChange(text.trim());
+  };
+  return (
+    <input
+      id={id}
+      className="input"
+      value={text}
+      placeholder="Any"
+      onChange={(e) => setText(e.target.value)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") commit();
+      }}
+      onBlur={commit}
+    />
+  );
+}
+
 function FilterControl({
   field,
   value,
@@ -122,22 +158,7 @@ function FilterControl({
       </select>
     );
   } else {
-    // Only a changed value is applied, so leaving the field keeps the page.
-    const commit = (text: string) => {
-      if (text.trim() !== value) onChange(text.trim());
-    };
-    control = (
-      <input
-        id={id}
-        className="input"
-        defaultValue={value}
-        placeholder="Any"
-        onKeyDown={(e) => {
-          if (e.key === "Enter") commit(e.currentTarget.value);
-        }}
-        onBlur={(e) => commit(e.currentTarget.value)}
-      />
-    );
+    control = <TextFilter id={id} value={value} onChange={onChange} />;
   }
   return (
     <div className="flex w-48 flex-col gap-1 text-xs font-medium text-slate-500">
@@ -338,7 +359,13 @@ export function ModelList({ model, models }: { model: ModelMeta; models: ModelMe
     .filter((f): f is FieldMeta => Boolean(f));
   // The record's name (or title, email...) links to it; without one, the first column does.
   const linkField = columns.find((f) => f.name === model.display_field) ?? columns[0];
-  const filters = model.list_filter
+  // The model's filters, then any other the URL applies, such as the one a
+  // record's "Related" link adds, so every filter in effect can be seen and
+  // changed.
+  const applied = Object.keys(query.filters ?? {}).filter(
+    (name) => query.filters?.[name] && !model.list_filter.includes(name),
+  );
+  const filters = [...model.list_filter, ...applied]
     .map((name) => model.fields.find((f) => f.name === name))
     .filter((f): f is FieldMeta => Boolean(f));
   const sortField = query.sort ?? model.ordering.field;
@@ -430,7 +457,7 @@ export function ModelList({ model, models }: { model: ModelMeta; models: ModelMe
           )}
           {filters.map((field) => (
             <FilterControl
-              key={`${field.name}:${query.filters?.[field.name] ?? ""}`}
+              key={field.name}
               field={field}
               value={query.filters?.[field.name] ?? ""}
               label={page?.labels[field.name]?.[query.filters?.[field.name] ?? ""]}

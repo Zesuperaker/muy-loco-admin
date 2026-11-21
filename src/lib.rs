@@ -442,6 +442,11 @@
 //!   `auth_session` middleware in the stack, and call `sign_out_everywhere` wherever a password
 //!   changes (see [Sessions](#sessions)).
 //! - **User ids**: every `Session::set_user_id` in your app passes the user's `pid`.
+//! - **Licenses**: the UI bundles open-source npm packages, such as React and Tailwind CSS.
+//!   Their names, versions and license notices ship in the crate as
+//!   `frontend/dist/THIRD-PARTY-LICENSES.md` ([on docs.rs](https://docs.rs/crate/muy-loco-admin/latest/source/frontend/dist/THIRD-PARTY-LICENSES.md),
+//!   or in the crate's folder under `~/.cargo/registry/src` or `cargo vendor`'s output);
+//!   include it with your app if you distribute it.
 //!
 //! ```yaml
 //! auth:

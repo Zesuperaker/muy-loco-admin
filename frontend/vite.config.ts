@@ -16,6 +16,8 @@ export default defineConfig(({ command }) => ({
     modulePreload: false,
     assetsInlineLimit: 0,
     sourcemap: false,
+    // The licenses of the bundled npm packages, shipped in the published crate.
+    license: { fileName: "THIRD-PARTY-LICENSES.md" },
   },
   server: {
     proxy: {

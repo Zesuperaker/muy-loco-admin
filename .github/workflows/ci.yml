@@ -40,10 +40,10 @@ jobs:
           RUSTDOCFLAGS: -D warnings
       - name: Package (builds the crate as published)
         run: cargo package --locked
-      - name: The package contains the built UI
+      - name: The package contains the built UI and its licenses
         run: |
           packaged="$(cargo package --locked --list)"
-          for built in frontend/dist/index.html 'frontend/dist/assets/*.js' 'frontend/dist/assets/*.css'; do
+          for built in frontend/dist/index.html 'frontend/dist/assets/*.js' 'frontend/dist/assets/*.css' frontend/dist/THIRD-PARTY-LICENSES.md; do
             test -n "$(git ls-files "$built")" || { echo "::error::no $built is committed"; exit 1; }
           done
           for file in $(git ls-files frontend/dist); do

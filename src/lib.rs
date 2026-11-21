@@ -442,6 +442,9 @@
 //!   `auth_session` middleware in the stack, and call `sign_out_everywhere` wherever a password
 //!   changes (see [Sessions](#sessions)).
 //! - **User ids**: every `Session::set_user_id` in your app passes the user's `pid`.
+//! - **Licenses**: the UI bundles MIT-licensed npm packages (`react`, `react-router`,
+//!   `@tanstack/react-query` and their dependencies). Their license notices ship in the crate
+//!   as `frontend/dist/THIRD-PARTY-LICENSES.md`; include it with your app if you distribute it.
 //!
 //! ```yaml
 //! auth:

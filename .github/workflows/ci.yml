@@ -100,7 +100,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2.9.3
         with:
           key: ${{ matrix.dependencies }}
-      - uses: taiki-e/install-action@v2.90.3
+      - uses: taiki-e/install-action@v2.90.5
         if: matrix.dependencies == 'locked'
         with:
           tool: cargo-llvm-cov@0.9.1

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.2](https://github.com/Zesuperaker/muy-loco-admin/compare/v0.3.1...v0.3.2) (2026-11-21)
+
+
+### Bug Fixes
+
+* ship the license notices of the UI's bundled npm packages, Tailwind CSS included, in the crate as frontend/dist/THIRD-PARTY-LICENSES.md ([8fe2800](https://github.com/Zesuperaker/muy-loco-admin/commit/8fe2800d54aa2d8f2ca0ee6988d9f34c89c1983c))
+
 ## [0.3.1](https://github.com/Zesuperaker/muy-loco-admin/compare/v0.3.0...v0.3.1) (2026-11-16)
 
 

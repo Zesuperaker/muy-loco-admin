@@ -24,7 +24,7 @@ tracing = { version = "=0.1.44" }
 # Unused in code, but its default `tracing-log` feature makes Loco's logger
 # forward `log` records (sqlx, sea-orm, rustls); Loco disables it.
 tracing-subscriber = { version = "=0.3.23", features = ["env-filter", "json"] }
-regex = { version = "=1.13.1" }
+regex = { version = "=1.13.2" }
 migration = { path = "migration" }
 sea-orm = { version = "=2.0.4", features = [
   "sqlx-sqlite",
@@ -45,5 +45,5 @@ required-features = []
 [dev-dependencies]
 loco-rs = { workspace = true, features = ["testing"] }
 serial_test = { version = "=4.0.1" }
-rstest = { version = "=0.28.0" }
+rstest = { version = "=0.29.0" }
 insta = { version = "=1.49.0", features = ["redactions", "yaml", "filters"] }
